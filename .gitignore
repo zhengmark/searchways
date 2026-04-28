@@ -19,3 +19,6 @@ route_output.md
 # 大文件
 *.pptx
 *.pdf
+
+# 周报
+WEEKLY_REPORT*
