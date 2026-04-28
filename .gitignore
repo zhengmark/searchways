@@ -1,0 +1,21 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.DS_Store
+node_modules/
+dist/
+*.egg-info/
+
+# Claude 内部文件
+.claude/
+
+# 生成的输出文件
+route_output.html
+route_output.md
+
+# 大文件
+*.pptx
+*.pdf
