@@ -824,8 +824,12 @@ def _infer_city_from_geocode(place_name: str) -> str:
         return ""
 
 
+import warnings
+
 def run_agent(user_input: str, session: AgentSession = None) -> tuple:
-    """返回 (回复文本, AgentSession) —— 图路径规划版"""
+    """[DEPRECATED] 返回 (回复文本, AgentSession) —— 图路径规划版
+    请改用 agent.multi_agent.orchestrator.run_multi_agent()"""
+    warnings.warn("run_agent is deprecated, use run_multi_agent instead", DeprecationWarning, stacklevel=2)
     is_new = session is None or not session.city
     if is_new:
         if session is None:

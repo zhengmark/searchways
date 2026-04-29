@@ -1,9 +1,10 @@
 import sys
-from agent.core import run_agent, AgentSession
+from agent.core import AgentSession
+from agent.multi_agent.orchestrator import run_multi_agent
 
 
 def main():
-    print("=== AI 本地路线规划 Agent ===")
+    print("=== AI 本地路线规划 Agent（多智能体协同版）===")
     print("输入你的出行需求，Agent 会为你规划路线。")
     print("之后可以继续提要求修改（换个餐厅、加个景点等）")
     print("输入 'quit' 退出。\n")
@@ -30,7 +31,7 @@ def main():
             break
 
         print("\n--- 规划中 ---")
-        result, session = run_agent(user_input, session)
+        result, session = run_multi_agent(user_input, session)
         print(f"\n--- 路线方案 ---\n{result}\n")
         print("-" * 60 + "\n")
 
