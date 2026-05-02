@@ -1,41 +1,29 @@
+"""高德 API 封装 — 所有函数直接返回 Python 对象，异常用 AmapAPIError."""
 import json
+import time
 import requests
 from agent.config import AMAP_API_KEY
-
-TOOL_DEFINITION = {
-    "name": "search_poi",
-    "description": "在指定区域搜索兴趣点（餐厅、景点、咖啡馆等），返回 POI 列表及基本信息",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "keywords": {
-                "type": "string",
-                "description": "搜索关键词，如「咖啡馆」「公园」「火锅」",
-            },
-            "location": {
-                "type": "string",
-                "description": "城市名或区域名，如「北京」「北京朝阳区」",
-            },
-            "radius_km": {
-                "type": "number",
-                "description": "搜索半径（公里），默认 3（仅当 location 传了经纬度时生效）",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "返回数量上限，默认 5",
-            },
-        },
-        "required": ["keywords", "location"],
-    },
-}
 
 AMAP_PLACE_TEXT_API = "https://restapi.amap.com/v3/place/text"
 AMAP_PLACE_AROUND_API = "https://restapi.amap.com/v3/place/around"
 AMAP_GEOCODE_API = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_INPUT_TIPS_API = "https://restapi.amap.com/v3/assistant/inputtips"
+
+
+class AmapAPIError(Exception):
+    """高德 API 错误，包含可读消息."""
+    def __init__(self, message: str, raw: dict = None):
+        super().__init__(message)
+        self.raw = raw or {}
+
+
+def _check_key():
+    if not AMAP_API_KEY or AMAP_API_KEY == "your-amap-key-here":
+        raise AmapAPIError("高德 API Key 未配置，请在 .env 中设置 AMAP_API_KEY")
 
 
 def _safe_float(biz_ext, field):
-    """安全地从 biz_ext 中提取数值字段，应对 None/list/dict 各种情况"""
+    """安全地从 biz_ext 中提取数值字段."""
     if not isinstance(biz_ext, dict):
         return None
     val = biz_ext.get(field)
@@ -47,10 +35,32 @@ def _safe_float(biz_ext, field):
         return None
 
 
-def search_poi(keywords: str, location: str, radius_km: float = 3, limit: int = 5) -> str:
-    if not AMAP_API_KEY or AMAP_API_KEY == "your-amap-key-here":
-        return json.dumps({"error": "高德 API Key 未配置，请在 .env 中设置 AMAP_API_KEY"}, ensure_ascii=False)
+def _parse_location(loc: str) -> tuple:
+    """解析高德 location 字符串 "lng,lat" → (lat, lng)，无效返回 (None, None)."""
+    if loc and loc != "0,0" and "," in loc:
+        lng_str, lat_str = loc.split(",")
+        return float(lat_str), float(lng_str)
+    return None, None
 
+
+def _build_poi_dict(poi: dict) -> dict:
+    """将高德原始 POI 转为统一的 dict 格式."""
+    lat, lng = _parse_location(poi.get("location", ""))
+    return {
+        "name": poi.get("name", ""),
+        "address": poi.get("address", ""),
+        "category": poi.get("type", ""),
+        "lat": lat,
+        "lng": lng,
+        "rating": _safe_float(poi.get("biz_ext"), "rating"),
+        "price_per_person": _safe_float(poi.get("biz_ext"), "cost"),
+        "distance": poi.get("distance"),
+    }
+
+
+def search_poi(keywords: str, location: str, radius_km: float = 3, limit: int = 5) -> list:
+    """在指定区域搜索 POI，返回 POI dict 列表."""
+    _check_key()
     try:
         params = {
             "key": AMAP_API_KEY,
@@ -62,83 +72,55 @@ def search_poi(keywords: str, location: str, radius_km: float = 3, limit: int = 
         resp = requests.get(AMAP_PLACE_TEXT_API, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-
     except requests.Timeout:
-        return json.dumps({"error": "高德 API 请求超时，请稍后重试"}, ensure_ascii=False)
+        raise AmapAPIError("高德 API 请求超时，请稍后重试")
     except requests.ConnectionError:
-        return json.dumps({"error": "无法连接到高德 API，请检查网络"}, ensure_ascii=False)
+        raise AmapAPIError("无法连接到高德 API，请检查网络")
     except requests.RequestException as e:
-        return json.dumps({"error": f"高德 API 请求失败: {str(e)}"}, ensure_ascii=False)
+        raise AmapAPIError(f"高德 API 请求失败: {e}")
 
     if data.get("status") != "1":
         info = data.get("info", "未知错误")
         if "INVALID_USER_KEY" in info:
-            return json.dumps({"error": "高德 API Key 无效，请在 .env 中检查 AMAP_API_KEY"}, ensure_ascii=False)
-        return json.dumps({"error": f"高德 API 返回错误: {info}"}, ensure_ascii=False)
+            raise AmapAPIError("高德 API Key 无效，请在 .env 中检查 AMAP_API_KEY")
+        raise AmapAPIError(f"高德 API 返回错误: {info}")
 
-    pois = data.get("pois", [])
-    if not pois:
-        return json.dumps({"error": f"在「{location}」未找到「{keywords}」相关的地点"}, ensure_ascii=False)
-
-    results = []
-    for poi in pois[:limit]:
-        loc = poi.get("location", "")
-        if loc and loc != "0,0" and "," in loc:
-            lng_str, lat_str = loc.split(",")
-            lat, lng = float(lat_str), float(lng_str)
-        else:
-            lat, lng = None, None
-        results.append({
-            "name": poi.get("name", ""),
-            "address": poi.get("address", ""),
-            "category": poi.get("type", ""),
-            "lat": lat,
-            "lng": lng,
-            "rating": _safe_float(poi.get("biz_ext"), "rating"),
-            "price_per_person": _safe_float(poi.get("biz_ext"), "cost"),
-        })
-
-    return json.dumps(results, ensure_ascii=False)
+    return [_build_poi_dict(p) for p in data.get("pois", [])[:limit]]
 
 
-def geocode(address: str, city: str = "") -> str:
-    """地址转经纬度，返回 JSON {"lng": xxx, "lat": xxx}"""
-    if not AMAP_API_KEY or AMAP_API_KEY == "your-amap-key-here":
-        return json.dumps({"error": "高德 API Key 未配置"}, ensure_ascii=False)
-
+def geocode(address: str, city: str = "") -> dict:
+    """地址转经纬度，返回 {"lng", "lat", "city", "district", "province"}."""
+    _check_key()
     try:
         params = {"key": AMAP_API_KEY, "address": address, "city": city}
         resp = requests.get(AMAP_GEOCODE_API, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except requests.Timeout:
-        return json.dumps({"error": "高德地理编码请求超时"}, ensure_ascii=False)
+        raise AmapAPIError("高德地理编码请求超时")
     except requests.ConnectionError:
-        return json.dumps({"error": "无法连接到高德 API"}, ensure_ascii=False)
+        raise AmapAPIError("无法连接到高德 API")
     except requests.RequestException as e:
-        return json.dumps({"error": f"请求失败: {str(e)}"}, ensure_ascii=False)
+        raise AmapAPIError(f"请求失败: {e}")
 
     if data.get("status") != "1" or not data.get("geocodes"):
-        return json.dumps({"error": f"未找到「{address}」的坐标信息"}, ensure_ascii=False)
+        raise AmapAPIError(f"未找到「{address}」的坐标信息")
 
     location = data["geocodes"][0].get("location", "")
-    if "," in location:
-        lng, lat = location.split(",")
-        g = data["geocodes"][0]
-        return json.dumps({
-            "lng": float(lng), "lat": float(lat),
-            "city": g.get("city", "").rstrip("市"),
-            "district": g.get("district", ""),
-            "province": g.get("province", ""),
-        }, ensure_ascii=False)
-    return json.dumps({"error": "坐标格式异常"}, ensure_ascii=False)
+    if "," not in location:
+        raise AmapAPIError("坐标格式异常")
+    lng, lat = location.split(",")
+    g = data["geocodes"][0]
+    return {
+        "lng": float(lng), "lat": float(lat),
+        "city": g.get("city", "").rstrip("市"),
+        "district": g.get("district", ""),
+        "province": g.get("province", ""),
+    }
 
 
-AMAP_INPUT_TIPS_API = "https://restapi.amap.com/v3/assistant/inputtips"
-
-
-def input_tips(keywords: str, city: str = "", limit: int = 5) -> str:
-    """输入提示：根据部分名称返回完整 POI 建议列表，用于模糊 geocode 兜底。"""
+def input_tips(keywords: str, city: str = "", limit: int = 5) -> list:
+    """输入提示，返回建议列表."""
     try:
         params = {"key": AMAP_API_KEY, "keywords": keywords, "datatype": "all"}
         if city:
@@ -147,82 +129,76 @@ def input_tips(keywords: str, city: str = "", limit: int = 5) -> str:
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return json.dumps({"error": "输入提示请求失败"}, ensure_ascii=False)
+        return []
 
-    tips = data.get("tips", [])
     results = []
-    for t in tips[:limit]:
+    for t in data.get("tips", [])[:limit]:
         loc = t.get("location", "")
         if loc and "," in loc and loc != "0,0":
             lng_str, lat_str = loc.split(",")
-            results.append({"name": t.get("name", ""), "lng": float(lng_str), "lat": float(lat_str),
-                            "address": t.get("address", ""), "district": t.get("district", "")})
-    return json.dumps(results, ensure_ascii=False)
+            results.append({
+                "name": t.get("name", ""),
+                "lng": float(lng_str), "lat": float(lat_str),
+                "address": t.get("address", ""),
+                "district": t.get("district", ""),
+            })
+    return results
 
 
 def robust_geocode(name: str, city: str) -> tuple:
     """
-    带多层兜底的 geocode：
-    1. 原始名称 + city
-    2. Amap input tips 模糊匹配（带名称相似度校验）
-    3. name + "地铁站" / "站"（应对漏掉后缀）
-    4. city + name（仅当名称 ≥3 字，防误匹配）
-    返回 (lat, lng) 或 (None, None)
-    """
-    import time
+    带多层兜底的 geocode，返回 (lat, lng) 或 (None, None).
 
-    # 第1层：原始名称
+    Layer 1: 原始名称 + city
+    Layer 2: input_tips 模糊匹配（子串校验防跨地名错配）
+    Layer 3: name + "地铁站" / "站"
+    Layer 4: city + name（仅 ≥3 字）
+    """
+    # Layer 1
     try:
-        gc = json.loads(geocode(name, city))
+        gc = geocode(name, city)
         if "lng" in gc:
             return gc["lat"], gc["lng"]
-    except Exception:
+    except AmapAPIError:
         pass
     time.sleep(0.02)
 
-    # 第2层：input tips 模糊匹配，用子串校验防跨地名错配
+    # Layer 2: input_tips 子串匹配
     try:
-        tips = json.loads(input_tips(name, city, limit=5))
-        if isinstance(tips, list):
-            for tip in tips:
-                tip_name = tip.get("name", "")
-                # 必须是连续子串（「四路地铁站」⊆「丈八四路地铁站」而 ⊄「凤城四路」）
-                if name in tip_name or tip_name in name:
-                    return tip["lat"], tip["lng"]
+        tips = input_tips(name, city, limit=5)
+        for tip in tips:
+            tip_name = tip.get("name", "")
+            if name in tip_name or tip_name in name:
+                return tip["lat"], tip["lng"]
     except Exception:
         pass
     time.sleep(0.02)
 
-    # 第3层：加后缀
+    # Layer 3: 加后缀
     for suffix in ["地铁站", "站"]:
         try:
-            gc = json.loads(geocode(f"{name}{suffix}", city))
+            gc = geocode(f"{name}{suffix}", city)
             if "lng" in gc:
                 return gc["lat"], gc["lng"]
-        except Exception:
+        except AmapAPIError:
             pass
         time.sleep(0.02)
 
-    # 第4层：城市前缀（仅当名称已有足够信息量）
+    # Layer 4: 城市前缀
     if len(name) >= 3:
         try:
-            gc = json.loads(geocode(f"{city}{name}", city))
+            gc = geocode(f"{city}{name}", city)
             if "lng" in gc:
                 return gc["lat"], gc["lng"]
-        except Exception:
+        except AmapAPIError:
             pass
 
     return None, None
 
 
-def search_around(location: str, keywords: str, radius: int = 3000, limit: int = 10) -> str:
-    """
-    周边搜索：在指定坐标附近搜索 POI。
-    location 为 "lng,lat" 格式（如 "108.940,34.261"）。
-    """
-    if not AMAP_API_KEY or AMAP_API_KEY == "your-amap-key-here":
-        return json.dumps({"error": "高德 API Key 未配置"}, ensure_ascii=False)
-
+def search_around(location: str, keywords: str, radius: int = 3000, limit: int = 10) -> list:
+    """周边搜索，返回 POI dict 列表."""
+    _check_key()
     try:
         params = {
             "key": AMAP_API_KEY,
@@ -236,54 +212,27 @@ def search_around(location: str, keywords: str, radius: int = 3000, limit: int =
         resp.raise_for_status()
         data = resp.json()
     except requests.Timeout:
-        return json.dumps({"error": "高德周边搜索请求超时"}, ensure_ascii=False)
+        raise AmapAPIError("高德周边搜索请求超时")
     except requests.ConnectionError:
-        return json.dumps({"error": "无法连接到高德 API"}, ensure_ascii=False)
+        raise AmapAPIError("无法连接到高德 API")
     except requests.RequestException as e:
-        return json.dumps({"error": f"请求失败: {str(e)}"}, ensure_ascii=False)
+        raise AmapAPIError(f"请求失败: {e}")
 
     if data.get("status") != "1":
-        return json.dumps({"error": f"高德 API 返回错误: {data.get('info', '未知')}"}, ensure_ascii=False)
+        raise AmapAPIError(f"高德 API 返回错误: {data.get('info', '未知')}")
 
-    pois = data.get("pois", [])
-    if not pois:
-        return json.dumps({"error": f"在指定位置附近未找到「{keywords}」"}, ensure_ascii=False)
-
-    results = []
-    for poi in pois[:limit]:
-        loc = poi.get("location", "")
-        if loc and loc != "0,0" and "," in loc:
-            lng_str, lat_str = loc.split(",")
-            lat, lng = float(lat_str), float(lng_str)
-        else:
-            lat, lng = None, None
-        results.append({
-            "name": poi.get("name", ""),
-            "address": poi.get("address", ""),
-            "category": poi.get("type", ""),
-            "lat": lat,
-            "lng": lng,
-            "distance": poi.get("distance"),
-            "rating": _safe_float(poi.get("biz_ext"), "rating"),
-            "price_per_person": _safe_float(poi.get("biz_ext"), "cost"),
-        })
-
-    return json.dumps(results, ensure_ascii=False)
+    return [_build_poi_dict(p) for p in data.get("pois", [])[:limit]]
 
 
-def search_along_route(origin: str, destination: str, keywords: str, radius: int = 3000, limit: int = 20) -> str:
-    """
-    沿途搜索：在路线沿线搜索 POI。
-    origin/destination 为 "lng,lat" 格式坐标。
-    通过采样起点、1/3、2/3、终点四个位置做周边搜索并合并结果。
-    """
+def search_along_route(origin: str, destination: str, keywords: str,
+                       radius: int = 3000, limit: int = 20) -> list:
+    """沿途搜索：采样 4 点做周边搜索并合并去重."""
     try:
         o_lng, o_lat = (float(x) for x in origin.split(","))
         d_lng, d_lat = (float(x) for x in destination.split(","))
     except (ValueError, AttributeError):
-        return json.dumps({"error": "坐标格式不正确，需要 'lng,lat' 格式"}, ensure_ascii=False)
+        raise AmapAPIError("坐标格式不正确，需要 'lng,lat' 格式")
 
-    # 沿路取 4 个采样点：起点、1/3、2/3、终点
     pts = [
         origin,
         f"{o_lng + (d_lng - o_lng) * 0.33:.6f},{o_lat + (d_lat - o_lat) * 0.33:.6f}",
@@ -292,14 +241,13 @@ def search_along_route(origin: str, destination: str, keywords: str, radius: int
     ]
 
     all_pois = []
-    per = limit // len(pts) + 1
+    per = max(limit // len(pts), 1)
     for pt in pts:
-        result = search_around(pt, keywords, radius, per)
-        data = json.loads(result)
-        if isinstance(data, list):
-            all_pois.extend(data)
+        try:
+            all_pois.extend(search_around(pt, keywords, radius, per))
+        except AmapAPIError:
+            pass
 
-    # 按名称去重
     seen = set()
     unique = []
     for p in all_pois:
@@ -307,5 +255,4 @@ def search_along_route(origin: str, destination: str, keywords: str, radius: int
         if name and name not in seen:
             seen.add(name)
             unique.append(p)
-
-    return json.dumps(unique[:limit], ensure_ascii=False)
+    return unique[:limit]

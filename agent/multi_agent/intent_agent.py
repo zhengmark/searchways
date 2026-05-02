@@ -1,11 +1,10 @@
-"""意图理解 Agent —— 深度解析用户出行需求，推断用户画像"""
+"""意图理解 Agent —— 深度解析用户出行需求，推断用户画像."""
 import json
 import re
 
-from agent.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from agent.llm_client import call_llm
 from agent.multi_agent.types import IntentResult, UserProfile
-
-API_URL = f"{LLM_BASE_URL.rstrip('/')}/v1/messages"
+from agent.tools.constants import INTENT_PLACEHOLDERS
 
 INTENT_SYSTEM_PROMPT = """你是一个出行意图分析专家。你的任务是深度理解用户的出行需求，而不仅仅是提取关键词。
 
@@ -29,27 +28,8 @@ INTENT_SYSTEM_PROMPT = """你是一个出行意图分析专家。你的任务是
 只输出 JSON，不要 markdown 代码块。"""
 
 
-def _call_api(messages: list, system: str = None, max_tokens: int = 4096) -> dict:
-    import requests
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LLM_API_KEY}",
-        "anthropic-version": "2023-06-01",
-    }
-    payload = {"model": LLM_MODEL, "max_tokens": max_tokens, "messages": messages}
-    if system:
-        payload["system"] = system
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
-
-
-# 拒绝的占位符列表
-_PLACEHOLDERS = {"起点地名", "未指定", "终点地名或空", "搜索关键词逗号分隔", "有特色的地方"}
-
-
 def run_intent_agent(user_input: str, city: str) -> IntentResult:
-    """深度解析用户出行意图"""
+    """深度解析用户出行意图."""
     prompt = f"""分析以下出行需求，输出结构化 JSON。
 
 城市：{city}
@@ -76,39 +56,36 @@ def run_intent_agent(user_input: str, city: str) -> IntentResult:
 }}
 
 重要规则：
-- origin/destination 必须保留用户输入中的完整地名原文，禁止截断或缩写。如「丈八四路地铁站」不能简化为「四路地铁站」
+- origin/destination 必须保留用户输入中的完整地名原文，禁止截断或缩写
 - num_stops: 把用户提到的数量加起来（如「2个餐厅+最后去1个夜景」→3）。精确提取数字，用户没说时填 3
 - keywords 必须是具体可搜索词，不要用「有特色的地方」这种模糊词或单字「吃」「喝」
 - 用户说"随便逛逛/什么都行/无所谓"时，keywords 填 ["美食", "景点"]，不要留空
 - 只输出 JSON"""
 
     try:
-        data = _call_api(
+        data = call_llm(
             messages=[{"role": "user", "content": prompt}],
             system=INTENT_SYSTEM_PROMPT,
             max_tokens=400,
         )
         text = data["content"][0]["text"].strip()
-        # 提取 JSON
         m = re.search(r"\{.*\}", text, re.DOTALL)
         if not m:
             raise ValueError("No JSON found in response")
         parsed = json.loads(m.group(0))
 
-        # 占位符校验
-        if parsed.get("origin") in _PLACEHOLDERS:
+        if parsed.get("origin") in INTENT_PLACEHOLDERS:
             parsed["origin"] = ""
-        if parsed.get("destination") in _PLACEHOLDERS:
+        if parsed.get("destination") in INTENT_PLACEHOLDERS:
             parsed["destination"] = ""
         kw = parsed.get("keywords", [])
-        if not kw or all(k in _PLACEHOLDERS for k in kw):
+        if not kw or all(k in INTENT_PLACEHOLDERS for k in kw):
             parsed["keywords"] = ["美食", "景点"]
         if isinstance(parsed.get("num_stops"), int) and 0 < parsed["num_stops"] <= 10:
             pass
         else:
             parsed["num_stops"] = 3
 
-        # 构建 UserProfile
         up = parsed.get("user_profile", {})
         profile = UserProfile(
             group_type=up.get("group_type", "solo"),
@@ -132,7 +109,6 @@ def run_intent_agent(user_input: str, city: str) -> IntentResult:
             raw_input=user_input,
         )
     except Exception:
-        # 降级：返回基础意图
         return IntentResult(
             origin="", destination=None,
             keywords=["美食", "景点"], num_stops=3,

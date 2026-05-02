@@ -11,6 +11,7 @@ dist/
 
 # Claude 内部文件
 .claude/
+.agents/
 
 # 生成的输出文件
 route_output.html
@@ -23,13 +24,7 @@ route_output.md
 # 周报
 WEEKLY_REPORT*
 
-# 测试文件
-test_*.py
-
 # 无关的 Node.js 实验（项目主体是 Python）
 index.js
 package.json
 package-lock.json
-
-# Claude 计划文件
-.claude/plans/

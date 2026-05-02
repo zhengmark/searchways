@@ -49,17 +49,29 @@
 /root/my-first-app/
 ├── .env                          # API Key（LLM + 高德 + 点评占位）
 ├── agent/
-│   ├── __init__.py               # 空文件
+│   ├── __init__.py
 │   ├── config.py                 # 读取 .env，导出 LLM_API_KEY/AMAP_API_KEY 等
+│   ├── llm_client.py             # ★ 共享 LLM 客户端（单点 call_llm，全 Agent 复用）
 │   ├── models.py                 # Pydantic 数据模型（POI, RouteStop, Route, UserIntent）
-│   ├── core.py                   # ★ 主入口 1042 行：run_agent() 6 步流水线 + 所有内部函数
+│   ├── core.py                   # 公共函数 + 旧版 run_agent()（deprecated）
+│   ├── multi_agent/
+│   │   ├── __init__.py
+│   │   ├── types.py              # Agent 间通信数据结构
+│   │   ├── orchestrator.py       # ★ 多智能体主控 Plan-Execute-Review-Refine
+│   │   ├── intent_agent.py       # 意图理解 Agent
+│   │   ├── poi_strategy_agent.py # POI 搜索策略 + 质量评估 Agent
+│   │   ├── reviewer_agent.py     # 路线质量审核 Agent（含时间预算校验）
+│   │   └── narrator_agent.py     # 个性化路线解说 Agent
 │   └── tools/
 │       ├── __init__.py
-│       ├── poi.py                # ★ 高德 API 封装 305 行：search_poi, geocode, robust_geocode, search_around, search_along_route, input_tips
-│       ├── graph_planner.py      # ★ 图算法 235 行：build_graph, shortest_path, _haversine, _project_ratio, decide_transport
-│       ├── routing.py            # 步行距离计算（高德 walking API），41 行
-│       └── reviews.py            # 点评 API 骨架，84 行
-├── test_ux_deep.py               # 5 画像深度体验测试 + 评分卡，145 行
+│       ├── constants.py          # 共享常量（关键词映射/黑名单/占位符）
+│       ├── geo.py                # 几何工具（haversine, project_ratio）
+│       ├── poi.py                # ★ 高德 API 封装：直接返回 Python 对象，异常用 AmapAPIError
+│       ├── poi_filter.py         # POI 过滤工具（去重/品类/坐标/距离）
+│       ├── graph_planner.py      # ★ 图算法：build_graph + shortest_path
+│       ├── routing.py            # 步行距离计算（高德 walking API）
+│       └── reviews.py            # 点评 API 骨架
+├── test/                         # 集成测试
 ├── test_user_scenarios.py        # 3 画像快速回归测试，124 行
 ├── test_graph.py                 # 单条路线集成测试（铁塔寺路→钟楼），41 行
 ├── test_routing.py               # 步行 API 单测
