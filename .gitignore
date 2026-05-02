@@ -21,6 +21,9 @@ route_output.md
 *.pptx
 *.pdf
 
+# 用户画像数据（每用户一个文件）
+users/
+
 # 周报
 WEEKLY_REPORT*
 
