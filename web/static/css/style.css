@@ -145,6 +145,44 @@ body {
   overflow-x: auto;
 }
 
+/* ── Chat ───────────────────────────────── */
+.chat-section { margin-top: 20px; }
+.chat-row input {
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.2s;
+}
+.chat-row input:focus { border-color: var(--primary); }
+.chat-row button {
+  padding: 10px 22px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: white;
+  background: var(--primary);
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+.chat-row button:hover { background: var(--primary-dark); }
+.chat-row button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ── Map Markers ────────────────────────── */
+.custom-marker {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 700;
+  border: 2px solid; box-shadow: 0 2px 6px rgba(0,0,0,.3);
+}
+.marker-start { background: #10b981; border-color: #059669; }
+.marker-mid { background: #3b82f6; border-color: #2563eb; }
+.marker-end { background: #f59e0b; border-color: #d97706; }
+
 /* ── History ────────────────────────────── */
 .history-section {
   margin-top: 24px;
@@ -165,6 +203,14 @@ body {
   font-size: 0.875rem;
   color: var(--text-muted);
 }
+.history-item {
+  padding: 6px 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: color 0.15s;
+}
+.history-item:hover { color: var(--primary); }
+.history-item:last-child { border-bottom: none; }
 
 /* ── Footer ─────────────────────────────── */
 .footer {

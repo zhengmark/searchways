@@ -41,8 +41,21 @@
         <div id="map" class="map-panel"></div>
         <div class="narration-panel">
           <div id="narration" class="narration-text"></div>
-          <div id="mermaid" class="mermaid-diagram"></div>
+          <div id="mermaidContainer" class="mermaid-diagram">
+            <pre class="mermaid" id="mermaidCode"></pre>
+          </div>
         </div>
+      </div>
+
+      <!-- ── 多轮对话 ────────────────────── -->
+      <div class="chat-section">
+        <div class="input-row chat-row">
+          <input type="text" id="chatInput"
+                 placeholder="对路线不满意？告诉我你想怎么改，例如：不去钟楼了，换个大雁塔..."
+                 onkeydown="if(event.key==='Enter') modifyRoute()">
+          <button id="chatBtn" onclick="modifyRoute()">修改路线</button>
+        </div>
+        <div id="chatStatus" class="status"></div>
       </div>
     </section>
 
@@ -61,8 +74,12 @@
   </footer>
 
   <script src="/static/assets/leaflet/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'default' });
+
     let map = null;
+    let sessionId = null;
 
     function setTag(text) {
       document.getElementById('userInput').value = text;
@@ -84,37 +101,127 @@
           body: JSON.stringify({ query: input }),
         });
         const data = await resp.json();
+        if (data.error) {
+          status.textContent = '规划失败：' + data.error;
+          btn.disabled = false;
+          return;
+        }
+        sessionId = data.session_id;
         status.textContent = '规划完成';
         btn.disabled = false;
         showResult(data);
+        addHistory(input, data);
       } catch (err) {
         status.textContent = '规划失败：' + err.message;
         btn.disabled = false;
       }
     }
 
+    async function modifyRoute() {
+      const input = document.getElementById('chatInput').value.trim();
+      if (!input || !sessionId) return;
+
+      const status = document.getElementById('chatStatus');
+      const btn = document.getElementById('chatBtn');
+      status.textContent = '修改中...';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: input, session_id: sessionId }),
+        });
+        const data = await resp.json();
+        if (data.error) {
+          status.textContent = '修改失败：' + data.error;
+          btn.disabled = false;
+          return;
+        }
+        status.textContent = '修改完成';
+        btn.disabled = false;
+        document.getElementById('chatInput').value = '';
+        showResult(data);
+        addHistory(input, data);
+      } catch (err) {
+        status.textContent = '修改失败：' + err.message;
+        btn.disabled = false;
+      }
+    }
+
+    async function renderMermaid(code) {
+      if (!code) return;
+      const el = document.getElementById('mermaidCode');
+      el.textContent = code;
+      el.removeAttribute('data-processed');
+      try {
+        const { svg } = await mermaid.render('mermaidSvg', code);
+        el.innerHTML = svg;
+      } catch (e) {
+        el.textContent = code;
+      }
+    }
+
     function showResult(data) {
       document.getElementById('resultArea').style.display = 'block';
-      document.getElementById('narration').innerHTML = data.narration || '暂无解说';
-      document.getElementById('mermaid').innerHTML = data.mermaid || '';
+      document.getElementById('narration').textContent = data.narration || '暂无解说';
+      renderMermaid(data.mermaid);
 
-      if (data.stops && data.stops.length > 0 && !map) {
-        map = L.map('map').setView([data.stops[0].lat || 34.26, data.stops[0].lng || 108.94], 13);
+      // 地图
+      const stops = data.stops || [];
+      const validStops = stops.filter(s => s.lat !== null && s.lng !== null);
+
+      if (!map) {
+        const centerLat = validStops.length > 0 ? validStops[0].lat : 34.26;
+        const centerLng = validStops.length > 0 ? validStops[0].lng : 108.94;
+        map = L.map('map').setView([centerLat, centerLng], 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '&copy; OpenStreetMap'
         }).addTo(map);
       }
-      if (map && data.stops) {
-        map.eachLayer(l => { if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l); });
-        const markers = data.stops.filter(s => s.lat && s.lng).map(s =>
-          L.marker([s.lat, s.lng]).bindPopup(s.name).addTo(map)
-        );
-        if (markers.length > 1) {
-          L.polyline(markers.map(m => m.getLatLng()), { color: '#2563eb' }).addTo(map);
+
+      // 清除旧的 markers/polylines
+      map.eachLayer(l => {
+        if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l);
+      });
+
+      if (validStops.length > 0) {
+        const markers = validStops.map(s => {
+          const cls = s.num === 0 ? 'marker-start' : 'marker-mid';
+          const icon = L.divIcon({
+            html: `<div class="custom-marker ${cls}">${s.num || ''}</div>`,
+            iconSize: [28, 28], iconAnchor: [14, 14], className: '',
+          });
+          const popup = `<b>${s.name}</b>` +
+            (s.rating ? `<br>⭐ ${s.rating}` : '') +
+            (s.price ? `<br>💰 ¥${s.price}` : '') +
+            (s.address ? `<br>📍 ${s.address}` : '');
+          return L.marker([s.lat, s.lng], { icon }).addTo(map).bindPopup(popup);
+        });
+
+        if (validStops.length > 1) {
+          L.polyline(validStops.map(s => [s.lat, s.lng]), {
+            color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,5'
+          }).addTo(map);
         }
+
         const group = new L.featureGroup(markers);
-        if (markers.length) map.fitBounds(group.getBounds().pad(0.1));
+        map.fitBounds(group.getBounds().pad(0.15));
       }
+    }
+
+    function addHistory(input, data) {
+      const list = document.getElementById('historyList');
+      if (list.textContent === '暂无记录') list.textContent = '';
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const time = new Date().toLocaleTimeString();
+      item.textContent = `[${time}] ${input.slice(0, 50)}${input.length > 50 ? '...' : ''}`;
+      item.onclick = () => {
+        document.getElementById('narration').textContent = data.narration || '';
+        renderMermaid(data.mermaid);
+      };
+      list.prepend(item);
     }
   </script>
 </body>
