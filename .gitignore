@@ -27,6 +27,9 @@ users/
 # 周报
 WEEKLY_REPORT*
 
+# SQLite 数据库
+*.db
+
 # 无关的 Node.js 实验（项目主体是 Python）
 index.js
 package.json

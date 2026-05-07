@@ -1,6 +1,6 @@
 import sys
-from agent.core import AgentSession
-from agent.multi_agent.orchestrator import run_multi_agent
+from app.shared.utils import AgentSession
+from app.core.orchestrator import run_multi_agent
 
 
 def main():
