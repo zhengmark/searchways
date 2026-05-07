@@ -20,6 +20,7 @@ from app.core.narrator_agent import run_narrator, NarrationContext
 from app.core.reviewer_agent import run_reviewer
 from app.core.modifier_agent import detect_modification
 
+from app.config import USE_POI_DB
 from app.providers.amap_provider import geocode, robust_geocode, AmapAPIError
 from app.providers.provider import search_poi, search_around, search_along_route
 from app.algorithms.graph_planner import build_graph, shortest_path, decide_transport
@@ -106,6 +107,77 @@ def _execute_search(strategy_regions: list, city: str, origin_coords=None, dest_
                 time.sleep(0.05)
 
     return deduplicate_by_name(all_pois)
+
+
+def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
+                            city: str = "") -> list:
+    """使用推荐引擎从本地 DB 召回 + 排序 POI."""
+    from db.connection import get_conn
+    from db.repository import _row_to_dict
+    from app.clustering.geo_cluster import geo_cluster
+    from app.recommender.engine import recommend
+
+    if not origin_coords and not dest_coords:
+        return []
+
+    ref_lat = origin_coords[0] if origin_coords else dest_coords[0]
+    ref_lng = origin_coords[1] if origin_coords else dest_coords[1]
+
+    # 从 DB 加载 POI（周边 5km 矩形范围）
+    radius_km = 5.0
+    lat_span = radius_km / 111.32
+    lng_span = radius_km / (111.32 * __import__("math").cos(__import__("math").radians(ref_lat)))
+    lat_min, lat_max = ref_lat - lat_span, ref_lat + lat_span
+    lng_min, lng_max = ref_lng - lng_span, ref_lng + lng_span
+
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM pois
+            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ? AND lat IS NOT NULL
+            ORDER BY rating DESC NULLS LAST
+            LIMIT 300
+        """, (lat_min, lat_max, lng_min, lng_max)).fetchall()
+        pois = [_row_to_dict(r) for r in rows]
+
+    if len(pois) < 5:
+        _progress("⚠️", f"DB 周边 POI 不足 ({len(pois)})，扩大搜索")
+        with get_conn() as conn:
+            rows = conn.execute("""
+                SELECT * FROM pois WHERE lat IS NOT NULL
+                ORDER BY rating DESC NULLS LAST LIMIT 300
+            """).fetchall()
+            pois = [_row_to_dict(r) for r in rows]
+
+    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI，聚类中...")
+
+    # 地理聚类
+    clusters = geo_cluster(pois, eps_meters=500, min_samples=3)
+    _progress("   →", f"{len(clusters)} 个地理簇")
+
+    # 推荐引擎：三路召回 + 精排
+    up = intent_result.user_profile
+    user_prefs = {
+        "interests": up.interests or intent_result.keywords or [],
+        "budget_level": up.budget_level,
+        "energy_level": up.energy_level,
+        "group_type": up.group_type,
+    }
+    # 提取品类关键词
+    from app.shared.constants import KW_NORMALIZE
+    target_cats = []
+    for kw in (intent_result.keywords or []):
+        expanded = KW_NORMALIZE.get(kw, kw)
+        target_cats.extend(expanded.split(","))
+
+    ranked = recommend(
+        pois, ref_lat, ref_lng,
+        clusters=clusters,
+        target_categories=target_cats or ["美食", "景点"],
+        user_prefs=user_prefs,
+        top_k=min(50, len(pois)),
+    )
+    _progress("✅", f"推荐引擎返回 {len(ranked)} 个 POI")
+    return ranked
 
 
 def _filter_and_validate(all_pois: list, origin_name: str, dest_name: str,
@@ -302,40 +374,46 @@ def _run_full_plan(user_input: str, session: AgentSession,
     elif dest_name:
         _progress("⚠️", "终点未能解析")
 
-    # 4. POI 搜索
-    _progress("🎯", "POI Strategy Agent 制定搜索策略")
-    strategy = build_search_strategy(intent_result, origin_coords, dest_coords)
-    for r in strategy.regions:
-        _progress("   →", f"{r.center} | {', '.join(r.keywords)} | {r.radius}m | {r.reason}")
+    # 4. POI 获取（DB 推荐引擎 或 高德 API 搜索）
+    if USE_POI_DB:
+        _progress("🎯", "推荐引擎（本地 DB）")
+        all_pois = _recommend_pois_from_db(origin_coords, dest_coords, intent_result, city)
+        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        _progress("✅", f"推荐引擎返回 {len(all_pois)} 个 POI，{len(valid_pois)} 个含坐标可建图")
+    else:
+        _progress("🎯", "POI Strategy Agent 制定搜索策略")
+        strategy = build_search_strategy(intent_result, origin_coords, dest_coords)
+        for r in strategy.regions:
+            _progress("   →", f"{r.center} | {', '.join(r.keywords)} | {r.radius}m | {r.reason}")
 
-    _progress("🔍", "执行 POI 搜索")
-    all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
+        _progress("🔍", "执行 POI 搜索")
+        all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
 
-    if len(all_pois) < 3:
-        _progress("⚠️", "搜索结果不足，全城兜底搜索")
-        for kw in strategy.fallback_keywords:
-            try:
-                pois = search_poi(keywords=kw, location=city, limit=10)
-                all_pois.extend(pois)
-            except AmapAPIError:
-                pass
-        all_pois = deduplicate_by_name(all_pois)
-
-    valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
-    _progress("✅", f"共获取 {len(all_pois)} 个 POI，{len(valid_pois)} 个含坐标可建图")
-
-    # POI 质量评估 → 不足时补搜
-    quality = evaluate_pois(valid_pois, intent_result)
-    _progress("📊", f"POI 质量评估：{quality.summary}")
-    if quality.needs_research and quality.research_suggestions:
-        _progress("🔄", "POI 质量不足，自动补搜")
-        adjusted = get_research_adjustments(quality.research_suggestions, intent_result)
-        if adjusted.regions:
-            new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
-            all_pois.extend(new_pois)
+        if len(all_pois) < 3:
+            _progress("⚠️", "搜索结果不足，全城兜底搜索")
+            for kw in strategy.fallback_keywords:
+                try:
+                    pois = search_poi(keywords=kw, location=city, limit=10)
+                    all_pois.extend(pois)
+                except AmapAPIError:
+                    pass
             all_pois = deduplicate_by_name(all_pois)
-            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
-            _progress("✅", f"补搜后共 {len(valid_pois)} 个有效 POI")
+
+        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        _progress("✅", f"共获取 {len(all_pois)} 个 POI，{len(valid_pois)} 个含坐标可建图")
+
+        # POI 质量评估 → 不足时补搜
+        quality = evaluate_pois(valid_pois, intent_result)
+        _progress("📊", f"POI 质量评估：{quality.summary}")
+        if quality.needs_research and quality.research_suggestions:
+            _progress("🔄", "POI 质量不足，自动补搜")
+            adjusted = get_research_adjustments(quality.research_suggestions, intent_result)
+            if adjusted.regions:
+                new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
+                all_pois.extend(new_pois)
+                all_pois = deduplicate_by_name(all_pois)
+                valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+                _progress("✅", f"补搜后共 {len(valid_pois)} 个有效 POI")
 
     # 5. 路线算法
     _progress("🗺️", "Route Engine 构建路线图")
@@ -440,11 +518,18 @@ def _run_modification(user_input: str, session: AgentSession,
     elif change_type == "change_poi_location":
         anchor = params.get("anchor", "")
         _progress("   →", f"在「{anchor}」附近重新搜索")
-        from app.core.poi_strategy_agent import SearchRegion, SearchStrategy
-        anchor_strategy = SearchStrategy(regions=[
-            SearchRegion(center=anchor, keywords=keywords.split(","), radius=2000, reason=f"用户指定「{anchor}」附近")
-        ])
-        all_pois = _execute_search(anchor_strategy.regions, city, origin_coords, dest_coords)
+        if USE_POI_DB:
+            from app.core.intent_agent import run_intent_agent
+            anchor_intent = run_intent_agent(
+                f"在{anchor}附近找 {keywords}", city
+            )
+            all_pois = _recommend_pois_from_db(origin_coords, dest_coords, anchor_intent, city)
+        else:
+            from app.core.poi_strategy_agent import SearchRegion, SearchStrategy
+            anchor_strategy = SearchStrategy(regions=[
+                SearchRegion(center=anchor, keywords=keywords.split(","), radius=2000, reason=f"用户指定「{anchor}」附近")
+            ])
+            all_pois = _execute_search(anchor_strategy.regions, city, origin_coords, dest_coords)
         valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("   →", f"搜到 {len(valid_pois)} 个有效 POI")
         need_regraph = True
@@ -457,21 +542,28 @@ def _run_modification(user_input: str, session: AgentSession,
     # ── 执行受影响环节 ───────────────────────────────
     if need_research:
         _progress("🔍", "重新搜索 POI")
-        # 用当前参数重建搜索策略
-        from app.core.intent_agent import run_intent_agent
-        temp_intent = run_intent_agent(
-            f"{origin_name} → {dest_name}，搜索 {keywords}，{num_stops} 站", city
-        )
-        strategy = build_search_strategy(temp_intent, origin_coords, dest_coords)
-        all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
-        if len(all_pois) < 3:
-            for kw in strategy.fallback_keywords:
-                try:
-                    all_pois.extend(search_poi(keywords=kw, location=city, limit=10))
-                except AmapAPIError:
-                    pass
-            all_pois = deduplicate_by_name(all_pois)
-        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        if USE_POI_DB:
+            from app.core.intent_agent import run_intent_agent
+            temp_intent = run_intent_agent(
+                f"{origin_name} → {dest_name}，搜索 {keywords}，{num_stops} 站", city
+            )
+            all_pois = _recommend_pois_from_db(origin_coords, dest_coords, temp_intent, city)
+            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        else:
+            from app.core.intent_agent import run_intent_agent
+            temp_intent = run_intent_agent(
+                f"{origin_name} → {dest_name}，搜索 {keywords}，{num_stops} 站", city
+            )
+            strategy = build_search_strategy(temp_intent, origin_coords, dest_coords)
+            all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
+            if len(all_pois) < 3:
+                for kw in strategy.fallback_keywords:
+                    try:
+                        all_pois.extend(search_poi(keywords=kw, location=city, limit=10))
+                    except AmapAPIError:
+                        pass
+                all_pois = deduplicate_by_name(all_pois)
+            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("✅", f"搜索到 {len(valid_pois)} 个有效 POI")
 
     # 未重新搜索则复用 session 中的 POI
@@ -579,21 +671,29 @@ def _narrate_review_output(
             break
 
         _progress("🔄", "审核不通过，调整搜索策略重新规划...")
-        adjusted = get_research_adjustments(review_result.retry_suggestions, intent_result)
-        if adjusted.regions:
-            new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
+        if USE_POI_DB:
+            # DB 路径：扩大推荐范围重新召回
+            new_pois = _recommend_pois_from_db(origin_coords, dest_coords, intent_result, city)
             all_pois.extend(new_pois)
             all_pois = deduplicate_by_name(all_pois)
             valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
             _progress("   →", f"补搜后共 {len(valid_pois)} 个有效 POI")
-            new_path = _run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
-                                         time_budget_hours=intent_result.time_budget_hours)
-            if new_path:
-                path_result = new_path
-                context.path_segments = path_result["segments"]
-                context.total_duration_min = path_result["total_duration_min"]
-                context.total_distance_m = path_result["total_distance"]
-                narration = run_narrator(context)
+        else:
+            adjusted = get_research_adjustments(review_result.retry_suggestions, intent_result)
+            if adjusted.regions:
+                new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
+                all_pois.extend(new_pois)
+                all_pois = deduplicate_by_name(all_pois)
+                valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+                _progress("   →", f"补搜后共 {len(valid_pois)} 个有效 POI")
+        new_path = _run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
+                                     time_budget_hours=intent_result.time_budget_hours)
+        if new_path:
+            path_result = new_path
+            context.path_segments = path_result["segments"]
+            context.total_duration_min = path_result["total_duration_min"]
+            context.total_distance_m = path_result["total_distance"]
+            narration = run_narrator(context)
         review_loops += 1
     else:
         if review_result:
