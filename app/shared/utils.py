@@ -34,8 +34,14 @@ class AgentSession:
 
 # ── 进度打印 ──────────────────────────────────────────
 
+_progress_callback = None
+
+
 def _progress(emoji: str, msg: str):
-    print(f"  {emoji}  {msg}")
+    if _progress_callback:
+        _progress_callback(emoji, msg)
+    else:
+        print(f"  {emoji}  {msg}")
 
 
 # ── 城市提取 ──────────────────────────────────────────

@@ -91,30 +91,59 @@
 
       const status = document.getElementById('status');
       const btn = document.getElementById('planBtn');
-      status.textContent = '规划中...';
+      status.innerHTML = '<span class="progress-step">规划中...</span>';
       btn.disabled = true;
 
       try {
-        const resp = await fetch('/api/plan', {
+        const resp = await fetch('/api/plan/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: input }),
         });
-        const data = await resp.json();
-        if (data.error) {
-          status.textContent = '规划失败：' + data.error;
-          btn.disabled = false;
-          return;
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // 解析 SSE 事件
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // 保留未完成行
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const evt = JSON.parse(line.slice(6));
+              if (evt.type === 'progress') {
+                addProgress(evt.emoji, evt.msg);
+              } else if (evt.type === 'result') {
+                sessionId = evt.session_id;
+                status.textContent = '规划完成';
+                btn.disabled = false;
+                showResult(evt);
+                addHistory(input, evt);
+              } else if (evt.type === 'error') {
+                status.textContent = '规划失败：' + evt.error;
+                btn.disabled = false;
+              }
+            } catch (e) {}
+          }
         }
-        sessionId = data.session_id;
-        status.textContent = '规划完成';
-        btn.disabled = false;
-        showResult(data);
-        addHistory(input, data);
       } catch (err) {
         status.textContent = '规划失败：' + err.message;
         btn.disabled = false;
       }
+    }
+
+    function addProgress(emoji, msg) {
+      const status = document.getElementById('status');
+      const step = document.createElement('span');
+      step.className = 'progress-step';
+      step.textContent = emoji + ' ' + msg;
+      status.appendChild(step);
     }
 
     async function modifyRoute() {

@@ -257,3 +257,50 @@ def search_along_route(origin: str, destination: str, keywords: str,
             seen.add(name)
             unique.append(p)
     return unique[:limit]
+
+
+def get_poi_detail(amap_id: str) -> dict:
+    """获取单个 POI 详情（评分/价格/电话等），返回 dict 或空 dict."""
+    _check_key()
+    try:
+        params = {
+            "key": AMAP_API_KEY,
+            "id": amap_id,
+            "extensions": "all",
+        }
+        resp = requests.get("https://restapi.amap.com/v3/place/detail", params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {}
+
+    if data.get("status") != "1" or not data.get("pois"):
+        return {}
+
+    poi = data["pois"][0]
+    biz = poi.get("biz_ext", {}) or {}
+    return {
+        "name": poi.get("name", ""),
+        "rating": _safe_float(biz, "rating"),
+        "price_per_person": _safe_float(biz, "cost"),
+        "address": poi.get("address", ""),
+    }
+
+
+def batch_get_poi_details(amap_ids: list, delay: float = 0.1) -> dict:
+    """批量获取 POI 详情，返回 {amap_id: detail_dict}."""
+    results = {}
+    for i, aid in enumerate(amap_ids):
+        if not aid:
+            continue
+        try:
+            detail = get_poi_detail(aid)
+            if detail:
+                results[aid] = detail
+        except AmapAPIError:
+            pass
+        if i > 0 and i % 10 == 0:
+            time.sleep(delay * 2)
+        else:
+            time.sleep(delay)
+    return results

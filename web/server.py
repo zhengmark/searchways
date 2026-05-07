@@ -1,18 +1,22 @@
 """FastAPI 网站服务 — 黑客松展示入口."""
+import asyncio
+import json
 import re
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from app.core.orchestrator import run_multi_agent
+from app.shared import utils as shared_utils
 from app.shared.utils import AgentSession
 
 WEB_DIR = Path(__file__).parent
@@ -102,6 +106,10 @@ def _find_poi(name: str, pois: list) -> dict:
     return {}
 
 
+# 线程池（用于在后台线程跑同步 orchestrator）
+_executor = ThreadPoolExecutor(max_workers=2)
+
+
 # ── 页面 ──────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -114,6 +122,66 @@ async def index(request: Request):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "service": "现在就出发"}
+
+
+@app.post("/api/plan/stream")
+async def api_plan_stream(req: PlanRequest):
+    """新建路线规划 — SSE 流式推送进度."""
+    session_id = uuid.uuid4().hex[:8]
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _on_progress(emoji: str, msg: str):
+        """同步回调：把进度推入 asyncio 队列."""
+        try:
+            queue.put_nowait({"type": "progress", "emoji": emoji, "msg": msg})
+        except asyncio.QueueFull:
+            pass
+
+    async def _event_generator():
+        # 在后台线程运行 orchestrator
+        loop = asyncio.get_event_loop()
+        shared_utils._progress_callback = _on_progress
+        try:
+            future = loop.run_in_executor(
+                _executor,
+                lambda: run_multi_agent(req.query, session=None, user_id="default"),
+            )
+            # 边等 orchestrator 边推 SSE 进度事件
+            while not future.done():
+                try:
+                    evt = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    continue
+            # 取最终结果
+            result, session = future.result()
+            sessions[session_id] = session
+            # 排空剩余进度事件
+            while not queue.empty():
+                try:
+                    evt = queue.get_nowait()
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                except asyncio.QueueEmpty:
+                    break
+            # 推送最终结果
+            final = _build_response(result, session, session_id)
+            final["type"] = "result"
+            yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            err = {"type": "error", "error": str(e), "session_id": session_id}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+        finally:
+            shared_utils._progress_callback = None
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/plan")
