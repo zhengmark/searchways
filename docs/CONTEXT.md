@@ -16,20 +16,22 @@
 
 | 模块 | 文件 | 状态 | 说明 |
 |------|------|------|------|
-| LLM 意图解析 | `multi_agent/intent_agent.py` | ✅ 完成 | 深度意图解析 + UserProfile 推理 + 搜索提示 |
-| 地理编码 | `poi.py:robust_geocode` | ✅ 完成 | 4 层递进兜底 + 正则回退 + 子串校验 |
-| POI 搜索 | `poi.py:search_poi/around/along_route` | ✅ 完成 | 高德 text/around 双 API + 走廊 4 点采样 + 返回 Python 对象 |
-| POI 搜索策略 | `multi_agent/poi_strategy_agent.py` | ✅ 完成 | LLM 制定搜索区域 + 关键词 + 质量评估 + 自动补搜 |
-| 图构建 | `graph_planner.py:build_graph` | ✅ 完成 | 全连接邻接矩阵，ThreadPool 并发，步行 API + haversine 兜底 |
-| 路径规划 | `graph_planner.py:shortest_path` | ✅ 完成 | 连线投影分段选取（有终点）/ 距离带分层（无终点）+ 时间预算约束 |
-| 路线解说 | `multi_agent/narrator_agent.py` | ✅ 完成 | 个性化解说，基于 UserProfile 调整语气和推荐角度 |
-| 路线审核 | `multi_agent/reviewer_agent.py` | ✅ 完成 | 质量审核（覆盖/多样/匹配/时间），最多 2 轮 refine |
-| Mermaid 图 | `core.py:_build_mermaid_from_path` | ✅ 完成 | 含交通工具 emoji + 颜色编码 |
-| Leaflet 地图 | `core.py:_build_route_html` | ✅ 完成 | 起终点 + 中间站标记 + 路线连线 |
-| 点评 API | `reviews.py` | 🔶 骨架 | 定义了 `fetch_reviews` tool，实际未接入 |
-| 多用户测试 | `test_ux_deep.py` / `test_user_scenarios.py` | ✅ 完成 | 5 画像自动化评分卡，3 画像快速回归 |
-| 多轮对话 | `multi_agent/orchestrator.py` + `modifier_agent.py` | ✅ 完成 | 规则+LLM 修改意图识别，增量重规划，session 持久化 |
-| 用户画像 | `user_profile.py` | ✅ 完成 | per-user JSON 持久化，256KB 压缩，favorites/history/session |
+| LLM 意图解析 | `app/core/intent_agent.py` | ✅ 完成 | 深度意图解析 + UserProfile 推理 + 搜索提示 |
+| 地理编码 | `app/providers/amap_provider.py:robust_geocode` | ✅ 完成 | 4 层递进兜底 + 正则回退 + 子串校验 |
+| POI 搜索 | `app/providers/amap_provider.py` | ✅ 完成 | 高德 text/around 双 API + 走廊 4 点采样 |
+| POI 搜索策略 | `app/core/poi_strategy_agent.py` | ✅ 完成 | LLM 制定搜索区域 + 关键词 + 质量评估 + 自动补搜 |
+| 图构建 | `app/algorithms/graph_planner.py:build_graph` | ✅ 完成 | 全连接邻接矩阵，ThreadPool 并发，步行 API + haversine 兜底 |
+| 路径规划 | `app/algorithms/graph_planner.py:shortest_path` | ✅ 完成 | 连线投影分段选取（有终点）/ 距离带分层（无终点）+ 时间预算约束 |
+| 路线解说 | `app/core/narrator_agent.py` | ✅ 完成 | 个性化解说，基于 UserProfile 调整语气和推荐角度 |
+| 路线审核 | `app/core/reviewer_agent.py` | ✅ 完成 | 质量审核（覆盖/多样/匹配/时间），最多 2 轮 refine |
+| Mermaid 图 | `app/shared/utils.py:_build_mermaid_from_path` | ✅ 完成 | 含交通工具 emoji + 颜色编码 |
+| Leaflet 地图 | `app/shared/utils.py:_build_route_html` | ✅ 完成 | 起终点 + 中间站标记 + 路线连线 |
+| 点评 API | `app/algorithms/reviews.py` | 🔶 骨架 | 定义了 `fetch_reviews` tool，实际未接入 |
+| 多用户测试 | `tests/test_ux_deep.py` / `tests/test_user_scenarios.py` | ✅ 完成 | 5 画像自动化评分卡，3 画像快速回归 |
+| 多轮对话 | `app/core/orchestrator.py` + `modifier_agent.py` | ✅ 完成 | 规则+LLM 修改意图识别（含 add_poi），增量重规划，session 持久化 |
+| 用户画像 | `app/user_profile.py` | ✅ 完成 | per-user JSON 持久化，256KB 压缩，favorites/history/session |
+| Web 前端 | `web/server.py` + `web/templates/index.html` | ✅ 完成 | FastAPI + SSE 流式 + Leaflet + Mermaid |
+| 本地 POI DB | `db/` + `app/recommender/` + `app/clustering/` | ✅ 完成 | 预计算聚类 + 推荐引擎（USE_POI_DB=true 启用） |
 | 移动端适配 | — | ❌ 未开始 | — |
 
 ---
@@ -51,41 +53,38 @@
 ```
 /root/my-first-app/
 ├── .env                          # API Key（LLM + 高德 + 点评占位）
-├── agent/
-│   ├── __init__.py
+├── app/
 │   ├── config.py                 # 读取 .env，导出 LLM_API_KEY/AMAP_API_KEY 等
-│   ├── llm_client.py             # ★ 共享 LLM 客户端（单点 call_llm，全 Agent 复用）
-│   ├── models.py                 # Pydantic 数据模型（POI, RouteStop, Route, UserIntent）
-│   ├── core.py                   # 公共函数（_extract_city, _build_mermaid, _build_route_html, AgentSession）
-│   ├── user_profile.py           # ★ 用户画像管理器（持久化、256KB 压缩、session 恢复）
-│   ├── multi_agent/
-│   │   ├── __init__.py
+│   ├── llm_client.py             # ★ 共享 LLM 客户端
+│   ├── models.py                 # Pydantic 数据模型
+│   ├── user_profile.py           # ★ 用户画像管理器
+│   ├── core/
 │   │   ├── types.py              # Agent 间通信数据结构
-│   │   ├── orchestrator.py       # ★ 多智能体主控 Plan-Execute-Review-Refine + 多轮对话
-│   │   ├── intent_agent.py       # 意图理解 Agent（深度解析 + 画像推理）
-│   │   ├── poi_strategy_agent.py # POI 搜索策略 + 质量评估 Agent
-│   │   ├── reviewer_agent.py     # 路线质量审核 Agent（含时间预算校验）
-│   │   ├── narrator_agent.py     # 个性化路线解说 Agent
-│   │   └── modifier_agent.py     # ★ 修改意图识别 Agent（8 类正则规则 + LLM 兜底）
-│   └── tools/
-│       ├── __init__.py
-│       ├── constants.py          # 共享常量（关键词映射/黑名单/占位符）
-│       ├── geo.py                # 几何工具（haversine, project_ratio）
-│       ├── poi.py                # ★ 高德 API 封装：直接返回 Python 对象，异常用 AmapAPIError
-│       ├── poi_filter.py         # POI 过滤工具（去重/品类/坐标/距离）
-│       ├── graph_planner.py      # ★ 图算法：build_graph + shortest_path
-│       ├── routing.py            # 步行距离计算（高德 walking API）
-│       └── reviews.py            # 点评 API 骨架
-├── users/                        # 用户画像文件（不提交）→ users/{user_id}.json
-├── test/                         # 集成测试
-├── test_user_scenarios.py        # 3 画像快速回归测试，124 行
-├── test_graph.py                 # 单条路线集成测试
-├── test_routing.py               # 步行 API 单测
-├── test_amap.py                  # 高德 API 连通性测试
-├── test_longcat.py               # LongCat API 连通性测试
-├── ARCHITECTURE.md               # 开发者落地文档（接口、数据流、扩展指南）
-├── route_output.md               # 最后一次运行的 Mermaid 图
-└── route_output.html             # 最后一次运行的 Leaflet 地图
+│   │   ├── orchestrator.py       # ★ 多智能体主控
+│   │   ├── intent_agent.py       # 意图理解 Agent
+│   │   ├── poi_strategy_agent.py # POI 搜索策略 + 质量评估
+│   │   ├── reviewer_agent.py     # 路线质量审核
+│   │   ├── narrator_agent.py     # 个性化路线解说
+│   │   └── modifier_agent.py     # ★ 修改意图识别（9 类规则 + LLM 兜底）
+│   ├── providers/
+│   │   └── amap_provider.py      # ★ 高德 API 封装
+│   ├── algorithms/
+│   │   ├── geo.py                # haversine, project_ratio
+│   │   ├── graph_planner.py      # ★ build_graph + shortest_path
+│   │   ├── poi_filter.py         # POI 过滤工具
+│   │   ├── routing.py            # 步行距离计算
+│   │   └── reviews.py            # 点评 API 骨架
+│   ├── recommender/              # 推荐引擎
+│   ├── clustering/               # 离线聚类
+│   └── shared/
+│       ├── constants.py          # 共享常量
+│       └── utils.py              # AgentSession, _extract_city, _build_mermaid, _build_route_html
+├── db/                           # 本地 POI 数据库
+├── web/                          # FastAPI + 单页应用
+├── data/users/                   # 用户画像文件
+├── data/output/                  # route_output.md/.html
+├── tests/                        # 集成测试
+└── docs/                         # ARCHITECTURE.md, CONTEXT.md
 ```
 
 ### 核心数据流（`run_multi_agent` Plan-Execute-Review-Refine）
@@ -110,7 +109,7 @@
   │      └─ 执行搜索 → Amap text/around/along_route API
   │      └─ POI 质量评估 → 不足时自动补搜（关键词规范化 + 品类黑名单过滤）
   ├─ 5. Route Engine         → build_graph() + shortest_path()
-  │      └─ 全连接邻接矩阵 → 连线投影分段选取 → 200m 最小间距过滤
+  │      └─ 全连接邻接矩阵 → 连线投影分段选取 → 500m 最小间距过滤
   │      └─ 时间预算约束：超出 20% 自动减站
   ├─ 6. Narrator Agent       → LLM 个性化解说（基于 UserProfile 调整语气）
   ├─ 7. Reviewer Agent       → 质量审核（覆盖/多样/匹配/时间），最多 2 轮 refine
@@ -118,24 +117,26 @@
   └─ 8. Output
        ├─ 文本回复 + Mermaid → route_output.md
        ├─ Leaflet 地图 → route_output.html
-       └─ 保存用户画像 → users/{user_id}.json（profile + favorites + history + session）
+       └─ 保存用户画像 → data/users/{user_id}.json（profile + favorites + history + session）
 
 【多轮修改 MODIFY】
   用户 "不去钟楼了，去大雁塔"
   ├─ modifier_agent.detect_modification()
-  │     ├─ 8 类正则规则优先（快速、确定性）
+  │     ├─ 9 类正则规则优先（快速、确定性）
   │     └─ LLM 兜底（模糊/复合表达）
   ├─ 识别为 change_destination → 只重跑受影响环节
   │     └─ geocode → POI 搜索 → 建图 → 解说 → 审核
   ├─ 其他修改类型：
   │     ├─ change_origin        → geocode + 重新搜索 + 建图
+  │     ├─ change_destination   → geocode + 重新搜索 + 建图
+  │     ├─ add_poi              → geocode 指定地点 → 插入候选池 → num_stops+1 → 建图
   │     ├─ change_keywords      → 重新搜索 + 建图
   │     ├─ change_num_stops     → 只重建图
   │     ├─ change_preferences   → 更新画像 + 重新解说
   │     ├─ change_poi_location  → 新区域搜索 + 建图
   │     ├─ adjust_constraint    → 重新建图（时间约束）
   │     └─ new_route            → 完整重规划
-  └─ 每轮结束：保存 session + history + favorites 到 users/{user_id}.json
+  └─ 每轮结束：保存 session + history + favorites 到 data/data/users/{user_id}.json
 ```
 
 ---
@@ -187,7 +188,7 @@
 
 ### 4.7 用户画像：单文件 JSON + 大小压缩
 
-**选择**：每个用户一个 JSON 文件（`users/{user_id}.json`），文件大小上限 256KB，按时间保留最新历史。
+**选择**：每个用户一个 JSON 文件（`data/users/{user_id}.json`），文件大小上限 256KB，按时间保留最新历史。
 
 **为什么不**：
 - SQLite：多一个依赖，对每条记录几百字节的数据过度设计
@@ -285,24 +286,24 @@
 # ── 运行测试 ──────────────────────────────────
 
 # 5 画像深度体验测试（约 3-5 分钟，调 LLM + 高德 API）
-python3 test_ux_deep.py
+python3 tests/test_ux_deep.py
 
 # 3 画像快速回归测试
-python3 test_user_scenarios.py
+python3 tests/test_user_scenarios.py
 
 # 单条路线集成测试（西安铁塔寺路 → 钟楼）
-python3 test_graph.py
+python3 tests/test_graph.py
 
 # API 连通性测试
-python3 test_longcat.py       # LLM API
-python3 test_amap.py          # 高德 API
-python3 test_routing.py       # 高德步行 API
+python3 tests/test_longcat.py       # LLM API
+python3 tests/test_amap.py          # 高德 API
+python3 tests/test_routing.py       # 高德步行 API
 
 # ── 手动跑一条路线（多智能体 pipeline） ─────────
 
 python3 -c "
 import sys; sys.path.insert(0, '.')
-from agent.multi_agent.orchestrator import run_multi_agent
+from app.core.orchestrator import run_multi_agent
 result, s = run_multi_agent('从丈八六路地铁站出发到浐灞玩', user_id='default')
 print(result)
 "
@@ -311,7 +312,7 @@ print(result)
 
 python3 -c "
 import sys; sys.path.insert(0, '.')
-from agent.multi_agent.orchestrator import run_multi_agent
+from app.core.orchestrator import run_multi_agent
 result, s = run_multi_agent('从丈八六路出发去钟楼吃', user_id='default')
 result2, s = run_multi_agent('不去钟楼了，去大雁塔', session=s, user_id='default')
 print(result2)
@@ -319,21 +320,21 @@ print(result2)
 
 # ── 查看输出文件 ───────────────────────────────
 
-cat route_output.md           # Mermaid 路线图
-python3 -m http.server 8000   # 然后浏览器打开 http://localhost:8000/route_output.html
+cat data/output/route_output.md           # Mermaid 路线图
+python3 -m http.server 8000   # 浏览器打开 http://localhost:8000/data/output/route_output.html
 
 # ── 单独测试 geocode 兜底链 ─────────────────────
 
 python3 -c "
 import sys; sys.path.insert(0, '.')
-from agent.tools.poi import robust_geocode
+from app.providers.amap_provider import robust_geocode
 print(robust_geocode('丈八四路地铁站', '西安'))
 print(robust_geocode('四路地铁站', '西安'))  # 截断后仍能正确恢复
 "
 
 # ── 查看用户画像 ───────────────────────────────
 
-cat users/default.json | python3 -m json.tool
+cat data/users/default.json | python3 -m json.tool
 ```
 
 ---
@@ -351,4 +352,4 @@ cat users/default.json | python3 -m json.tool
 
 ---
 
-*生成时间：2026-04-27 | 更新：2026-05-02（多轮对话 + 用户画像）| 代码总计 ~3250 行 Python*
+*生成时间：2026-04-27 | 更新：2026-05-08（目录重构 + Web 前端 + add_poi + 500m 间距）*

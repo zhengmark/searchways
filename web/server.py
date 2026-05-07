@@ -63,7 +63,7 @@ def _build_response(narration_text: str, session: AgentSession, session_id: str)
             "lat": None, "lng": None, "rating": None, "price": None, "address": "", "num": 0,
         })
         # 尝试填充起点坐标
-        origin_coords = getattr(session, '_origin_coords', None)
+        origin_coords = session.origin_coords
         if origin_coords:
             stops[0]["lat"] = origin_coords[0]
             stops[0]["lng"] = origin_coords[1]
@@ -75,7 +75,7 @@ def _build_response(narration_text: str, session: AgentSession, session_id: str)
             lat = info.get("lat")
             lng = info.get("lng")
             # 终点坐标回退到 dest_coords
-            dest_coords = getattr(session, '_dest_coords', None)
+            dest_coords = session.dest_coords
             if lat is None and dest_coords and to_name == (session.dest_name or ""):
                 lat, lng = dest_coords[0], dest_coords[1]
             stops.append({
@@ -96,8 +96,8 @@ def _build_response(narration_text: str, session: AgentSession, session_id: str)
         "city": session.city,
         "total_duration_min": path["total_duration_min"] if path else 0,
         "total_distance_m": path.get("total_distance", 0) if path else 0,
-        "review_score": getattr(session, '_review_score', None),
-        "dest_coords": list(getattr(session, '_dest_coords', None) or ()) or None,
+        "review_score": session.review_score or None,
+        "dest_coords": list(session.dest_coords or ()) or None,
     }
 
 

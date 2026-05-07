@@ -360,11 +360,14 @@
         : [validStops[0].lat, validStops[0].lng];
 
       if (!map) {
-        map = L.map('map').setView(initCenter, 13);
+        map = L.map('map', { attributionControl: false }).setView(initCenter, 13);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           attribution: '&copy; OpenStreetMap'
         }).addTo(map);
       }
+
+      // Fix map size when container was previously hidden
+      map.invalidateSize();
 
       map.eachLayer(l => {
         if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l);

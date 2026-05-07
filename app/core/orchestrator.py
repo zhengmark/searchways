@@ -6,286 +6,31 @@
   每轮结束: 保存用户画像 + session 到 users/{user_id}.json
 """
 
-import json
 import re
-import time
-from pathlib import Path
 
 from app.llm_client import call_llm
 from app.user_profile import UserProfileManager
 
 from app.core.intent_agent import run_intent_agent
-from app.core.poi_strategy_agent import build_search_strategy, evaluate_pois, get_research_adjustments
-from app.core.narrator_agent import run_narrator, NarrationContext
-from app.core.reviewer_agent import run_reviewer
+from app.core.poi_strategy_agent import (
+    build_search_strategy, evaluate_pois, get_research_adjustments,
+    SearchRegion, SearchStrategy,
+)
 from app.core.modifier_agent import detect_modification
+from app.core.types import IntentResult, UserProfile
 
 from app.config import USE_POI_DB
-from app.providers.amap_provider import geocode, robust_geocode, AmapAPIError
-from app.providers.provider import search_poi, search_around, search_along_route
-from app.algorithms.graph_planner import build_graph, shortest_path, decide_transport
-from app.algorithms.poi_filter import normalize_keywords, filter_by_category, filter_by_coords, filter_near_anchor, deduplicate_by_name
-from app.algorithms.geo import haversine
+from app.providers.amap_provider import AmapAPIError
+from app.providers.provider import search_poi
+from app.algorithms.poi_filter import deduplicate_by_name
 
 from app.shared.utils import (
-    _extract_city, _infer_city_from_geocode, _progress,
-    _build_mermaid_from_path, _build_route_html, AgentSession,
+    _extract_city, _infer_city_from_geocode, _progress, AgentSession,
 )
 
-MAX_REVIEW_LOOPS = 2
-
-# 地名正则
-_PLACE_RE = re.compile(
-    r"[一-鿿]{2,6}(?:地铁站|轻轨站|高铁站|火车站|汽车站|公交站|"
-    r"路|街|巷|道|里|胡同|园|公园|广场|大厦|商场|购物中心|门|楼|塔|"
-    r"景区|博物馆|图书馆|医院|学校|大学|学院|机场|码头)"
-)
-
-
-# ── 内部辅助函数 ──────────────────────────────────────
-
-def _execute_search(strategy_regions: list, city: str, origin_coords=None, dest_coords=None) -> list:
-    """执行搜索策略，返回去重后的 POI 列表."""
-    all_pois = []
-    for region in strategy_regions:
-        normalized_kws = normalize_keywords(region.keywords)
-        if not normalized_kws:
-            normalized_kws = ["美食", "景点"]
-
-        use_around, loc_str = False, ""
-        try:
-            gc = geocode(region.center, city)
-            if "lng" in gc and "lat" in gc:
-                loc_str = f"{gc['lng']},{gc['lat']}"
-                use_around = True
-        except AmapAPIError:
-            pass
-
-        for kw in normalized_kws[:3]:
-            try:
-                if use_around:
-                    pois = search_around(loc_str, kw, radius=min(region.radius, 5000), limit=10)
-                else:
-                    pois = search_poi(keywords=kw, location=city, limit=10)
-            except AmapAPIError:
-                continue
-            _progress("   →", f"「{region.center}」搜到 {len(pois)} 个「{kw}」")
-            all_pois.extend(pois)
-            time.sleep(0.05)
-
-    # 沿途补充搜索
-    if origin_coords and dest_coords:
-        o_str = f"{origin_coords[1]},{origin_coords[0]}"
-        d_str = f"{dest_coords[1]},{dest_coords[0]}"
-        for region in strategy_regions:
-            for kw in region.keywords[:2]:
-                try:
-                    pois = search_along_route(o_str, d_str, kw, radius=2000, limit=10)
-                    all_pois.extend(pois)
-                except AmapAPIError:
-                    pass
-                time.sleep(0.05)
-    elif origin_coords:
-        o_str = f"{origin_coords[1]},{origin_coords[0]}"
-        for region in strategy_regions:
-            for kw in region.keywords[:2]:
-                try:
-                    pois = search_around(o_str, kw, radius=5000, limit=10)
-                    all_pois.extend(pois)
-                except AmapAPIError:
-                    pass
-                time.sleep(0.05)
-    elif dest_coords:
-        d_str = f"{dest_coords[1]},{dest_coords[0]}"
-        for region in strategy_regions:
-            for kw in region.keywords[:2]:
-                try:
-                    pois = search_around(d_str, kw, radius=5000, limit=10)
-                    all_pois.extend(pois)
-                except AmapAPIError:
-                    pass
-                time.sleep(0.05)
-
-    return deduplicate_by_name(all_pois)
-
-
-def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
-                            city: str = "") -> list:
-    """使用预计算聚类 + 推荐引擎从本地 DB 召回 + 排序 POI."""
-    from db.connection import get_conn
-    from db.repository import _row_to_dict
-    from db.cluster import query_clusters
-    from app.recommender.engine import recommend
-
-    if not origin_coords and not dest_coords:
-        return []
-
-    o_lat = origin_coords[0] if origin_coords else dest_coords[0]
-    o_lng = origin_coords[1] if origin_coords else dest_coords[1]
-    d_lat = dest_coords[0] if dest_coords else None
-    d_lng = dest_coords[1] if dest_coords else None
-
-    import math
-    with get_conn() as conn:
-        seen_amap = set()
-        all_rows = []
-
-        def _add_rows(rows):
-            for r in rows:
-                if r["amap_id"] not in seen_amap:
-                    seen_amap.add(r["amap_id"])
-                    all_rows.append(r)
-
-        # 1. 起点附近预计算簇
-        for c in query_clusters(o_lat, o_lng, limit=5):
-            c_rows = conn.execute(
-                "SELECT * FROM pois WHERE cluster_id = ? AND lat IS NOT NULL LIMIT 60",
-                (c["cluster_id"],),
-            ).fetchall()
-            _add_rows(c_rows)
-
-        # 2. 终点附近预计算簇
-        if d_lat is not None:
-            for c in query_clusters(d_lat, d_lng, limit=5):
-                c_rows = conn.execute(
-                    "SELECT * FROM pois WHERE cluster_id = ? AND lat IS NOT NULL LIMIT 60",
-                    (c["cluster_id"],),
-                ).fetchall()
-                _add_rows(c_rows)
-
-        # 3. 走廊 bbox（始终执行，保证空间覆盖）
-        margin_km = 5.0
-        if d_lat is not None:
-            lat_min = min(o_lat, d_lat) - margin_km / 111.32
-            lat_max = max(o_lat, d_lat) + margin_km / 111.32
-            mid_lat = (o_lat + d_lat) / 2
-            lng_span = margin_km / (111.32 * math.cos(math.radians(mid_lat)))
-            lng_min = min(o_lng, d_lng) - lng_span
-            lng_max = max(o_lng, d_lng) + lng_span
-        else:
-            lat_span = margin_km / 111.32
-            lng_span = margin_km / (111.32 * math.cos(math.radians(o_lat)))
-            lat_min, lat_max = o_lat - lat_span, o_lat + lat_span
-            lng_min, lng_max = o_lng - lng_span, o_lng + lng_span
-
-        corridor_rows = conn.execute("""
-            SELECT * FROM pois
-            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
-              AND lat IS NOT NULL
-            ORDER BY rating DESC NULLS LAST
-            LIMIT 300
-        """, (lat_min, lat_max, lng_min, lng_max)).fetchall()
-        _add_rows(corridor_rows)
-
-        pois = [_row_to_dict(r) for r in all_rows]
-
-    n_clusters = len({p.get("cluster_id") for p in pois if p.get("cluster_id") is not None})
-    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI（{n_clusters} 个预计算簇）")
-
-    # 3. 按预计算 cluster_id 构造簇（跳过实时聚类）
-    clusters_by_id = {}
-    for p in pois:
-        cid = p.get("cluster_id")
-        if cid is not None:
-            if cid not in clusters_by_id:
-                clusters_by_id[cid] = {"pois": [], "lats": [], "lngs": []}
-            clusters_by_id[cid]["pois"].append(p)
-            clusters_by_id[cid]["lats"].append(p["lat"])
-            clusters_by_id[cid]["lngs"].append(p["lng"])
-
-    clusters = [
-        {
-            "cluster_id": cid,
-            "center_lat": sum(c["lats"]) / len(c["lats"]),
-            "center_lng": sum(c["lngs"]) / len(c["lngs"]),
-            "size": len(c["pois"]),
-            "pois": c["pois"],
-        }
-        for cid, c in clusters_by_id.items()
-        if len(c["pois"]) >= 2
-    ]
-    _progress("   →", f"{len(clusters)} 个预计算簇（无需实时聚类）")
-
-    # 4. 推荐引擎
-    up = intent_result.user_profile
-    user_prefs = {
-        "interests": up.interests or intent_result.keywords or [],
-        "budget_level": up.budget_level,
-        "energy_level": up.energy_level,
-        "group_type": up.group_type,
-    }
-    from app.shared.constants import KW_NORMALIZE
-    target_cats = []
-    for kw in (intent_result.keywords or []):
-        expanded = KW_NORMALIZE.get(kw, kw)
-        target_cats.extend(expanded.split(","))
-
-    ranked = recommend(
-        pois, o_lat, o_lng,
-        d_lat=d_lat, d_lng=d_lng,
-        clusters=clusters,
-        target_categories=target_cats or ["美食", "景点"],
-        user_prefs=user_prefs,
-        top_k=min(50, len(pois)),
-    )
-    _progress("✅", f"推荐引擎返回 {len(ranked)} 个 POI")
-    return ranked
-
-
-def _filter_and_validate(all_pois: list, origin_name: str, dest_name: str,
-                         origin_coords=None, dest_coords=None) -> list:
-    """过滤 POI."""
-    filtered = filter_by_category(all_pois)
-    filtered = filter_by_coords(filtered)
-    filtered = filter_near_anchor(filtered, origin_coords, origin_name)
-    filtered = filter_near_anchor(filtered, dest_coords, dest_name) if dest_coords and dest_name else filtered
-    return filtered
-
-
-def _run_route_engine(origin_coords, valid_pois: list, dest_coords, num_stops: int,
-                      time_budget_hours: float = None) -> dict:
-    """建图 → 最短路径，可选时间预算约束."""
-    if not origin_coords and not dest_coords:
-        return None
-    if origin_coords and valid_pois:
-        nodes, graph = build_graph(origin_coords, valid_pois, dest_coords)
-        path = shortest_path(graph, nodes, num_stops)
-    elif dest_coords and valid_pois:
-        nodes, graph = build_graph(dest_coords, valid_pois, dest_coords)
-        path = shortest_path(graph, nodes, num_stops)
-    else:
-        return None
-
-    if path and time_budget_hours:
-        budget_minutes = time_budget_hours * 60
-        if path["total_duration_min"] > budget_minutes * 1.2:
-            _progress("⏱️", f"总耗时 {path['total_duration_min']} 分超出预算 {budget_minutes} 分，自动减站")
-            for reduced in range(num_stops - 1, 0, -1):
-                nodes2, graph2 = build_graph(origin_coords or dest_coords, valid_pois, dest_coords)
-                path2 = shortest_path(graph2, nodes2, reduced)
-                if path2 and path2["total_duration_min"] <= budget_minutes * 1.1:
-                    _progress("   →", f"缩减为 {reduced} 站，耗时 {path2['total_duration_min']} 分")
-                    return path2
-            _progress("   →", "即使缩减仍超出预算，使用当前最佳方案")
-    return path
-
-
-def _geocode_place(name: str, city: str, user_input: str = "", skip_names: list = None) -> tuple:
-    """地理编码单个地名，失败时尝试从 user_input 中正则提取."""
-    if not name:
-        return None, ""
-    skip_names = skip_names or []
-    lat, lng = robust_geocode(name, city)
-    if lat is not None:
-        return (lat, lng), name
-    # 正则回退
-    for m in _PLACE_RE.findall(user_input):
-        if m in skip_names:
-            continue
-        lat, lng = robust_geocode(m, city)
-        if lat is not None:
-            return (lat, lng), m
-    return None, name
+from app.pipeline.poi_pipeline import execute_poi_search, recommend_pois_from_db, filter_and_validate
+from app.pipeline.route_pipeline import geocode_place, run_route_engine
+from app.pipeline.output_pipeline import narrate_review_output
 
 
 def _is_chat_message(user_input: str) -> bool:
@@ -315,7 +60,6 @@ def run_multi_agent(user_input: str, session: AgentSession = None,
     if session is None:
         session = AgentSession()
 
-    # ── 加载用户画像 ─────────────────────────────────
     profile_mgr = UserProfileManager(user_id=user_id)
     user_data = profile_mgr.load()
     saved_session = user_data.get("session", {})
@@ -336,13 +80,13 @@ def run_multi_agent(user_input: str, session: AgentSession = None,
     session_state = saved_session if not session.city else {
         "city": session.city,
         "origin": session.start_name,
-        "origin_coords": getattr(session, '_origin_coords', None),
+        "origin_coords": session.origin_coords,
         "destination": session.dest_name,
-        "dest_coords": getattr(session, '_dest_coords', None),
+        "dest_coords": session.dest_coords,
         "last_stops": session.stop_names,
-        "num_stops": getattr(session, '_num_stops', 3),
-        "keywords": getattr(session, '_keywords', "美食,景点"),
-        "last_user_input": getattr(session, '_last_user_input', ""),
+        "num_stops": session.num_stops,
+        "keywords": session.keywords,
+        "last_user_input": session.last_user_input,
     }
 
     is_new_session = not session_state.get("city")
@@ -358,22 +102,15 @@ def run_multi_agent(user_input: str, session: AgentSession = None,
             "preferences": user_data.get("profile", {}),
         }
         modification = detect_modification(user_input, current_context)
-        # new_route 或 none 视为全新规划
         if modification.change_type in ("new_route", "none"):
             is_new_session = True
-            session = AgentSession()  # 重置 session
+            session = AgentSession()
             if user_data.get("profile", {}).get("city"):
                 session.default_city = user_data["profile"].get("default_city", "")
 
-    # ═══════════════════════════════════════════════════
-    # 完整规划流程（新路线 或 new_route）
-    # ═══════════════════════════════════════════════════
     if is_new_session:
         return _run_full_plan(user_input, session, profile_mgr, user_data)
 
-    # ═══════════════════════════════════════════════════
-    # 多轮修改流程
-    # ═══════════════════════════════════════════════════
     return _run_modification(user_input, session, profile_mgr, user_data,
                              session_state, modification)
 
@@ -406,7 +143,6 @@ def _run_full_plan(user_input: str, session: AgentSession,
     if intent_result.time_budget_hours:
         _progress("   →", f"时间预算：{intent_result.time_budget_hours} 小时")
 
-    # 更新用户画像（从意图推理中学习偏好）
     if intent_result.preference_reasoning:
         profile_mgr.update_profile(intent_result.user_profile)
 
@@ -414,8 +150,8 @@ def _run_full_plan(user_input: str, session: AgentSession,
     _progress("📍", "解析起终点坐标")
     origin_name = intent_result.origin or ""
     dest_name = intent_result.destination or ""
-    origin_coords, origin_name = _geocode_place(origin_name, city, user_input)
-    dest_coords, dest_name = _geocode_place(dest_name, city, user_input, skip_names=[origin_name])
+    origin_coords, origin_name = geocode_place(origin_name, city, user_input)
+    dest_coords, dest_name = geocode_place(dest_name, city, user_input, skip_names=[origin_name])
 
     if origin_coords:
         _progress("   →", f"起点：{origin_coords[1]},{origin_coords[0]}")
@@ -429,8 +165,8 @@ def _run_full_plan(user_input: str, session: AgentSession,
     # 4. POI 获取（DB 推荐引擎 或 高德 API 搜索）
     if USE_POI_DB:
         _progress("🎯", "推荐引擎（本地 DB）")
-        all_pois = _recommend_pois_from_db(origin_coords, dest_coords, intent_result, city)
-        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        all_pois = recommend_pois_from_db(origin_coords, dest_coords, intent_result, city)
+        valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("✅", f"推荐引擎返回 {len(all_pois)} 个 POI，{len(valid_pois)} 个含坐标可建图")
     else:
         _progress("🎯", "POI Strategy Agent 制定搜索策略")
@@ -439,7 +175,7 @@ def _run_full_plan(user_input: str, session: AgentSession,
             _progress("   →", f"{r.center} | {', '.join(r.keywords)} | {r.radius}m | {r.reason}")
 
         _progress("🔍", "执行 POI 搜索")
-        all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
+        all_pois = execute_poi_search(strategy.regions, city, origin_coords, dest_coords)
 
         if len(all_pois) < 3:
             _progress("⚠️", "搜索结果不足，全城兜底搜索")
@@ -451,7 +187,7 @@ def _run_full_plan(user_input: str, session: AgentSession,
                     pass
             all_pois = deduplicate_by_name(all_pois)
 
-        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+        valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("✅", f"共获取 {len(all_pois)} 个 POI，{len(valid_pois)} 个含坐标可建图")
 
         # POI 质量评估 → 不足时补搜
@@ -461,17 +197,17 @@ def _run_full_plan(user_input: str, session: AgentSession,
             _progress("🔄", "POI 质量不足，自动补搜")
             adjusted = get_research_adjustments(quality.research_suggestions, intent_result)
             if adjusted.regions:
-                new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
+                new_pois = execute_poi_search(adjusted.regions, city, origin_coords, dest_coords)
                 all_pois.extend(new_pois)
                 all_pois = deduplicate_by_name(all_pois)
-                valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+                valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
                 _progress("✅", f"补搜后共 {len(valid_pois)} 个有效 POI")
 
     # 5. 路线算法
     _progress("🗺️", "Route Engine 构建路线图")
     num_stops = min(intent_result.num_stops, 5)
-    stashed_origin_coords = origin_coords  # 保存用于 HTML map 输出
-    path_result = _run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
+    stashed_origin_coords = origin_coords
+    path_result = run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
                                     time_budget_hours=intent_result.time_budget_hours)
 
     if path_result is None:
@@ -490,8 +226,8 @@ def _run_full_plan(user_input: str, session: AgentSession,
         if s["to"] not in (origin_name, dest_name, "终点")
     ]
 
-    # 6. 解说 → 审核 → 输出（与修改流程共用）
-    return _narrate_review_output(
+    # 6. 解说 → 审核 → 输出
+    return narrate_review_output(
         user_input, session, profile_mgr, user_data,
         origin_name, dest_name, city,
         origin_coords=stashed_origin_coords, dest_coords=dest_coords,
@@ -506,7 +242,7 @@ def _run_full_plan(user_input: str, session: AgentSession,
 
 def _run_modification(user_input: str, session: AgentSession,
                       profile_mgr: UserProfileManager, user_data: dict,
-                      state: dict, mod: 'ModificationIntent') -> tuple:
+                      state: dict, mod) -> tuple:
     """增量修改已有路线（只重跑受影响环节）."""
     _progress("🔄", f"检测到修改意图：{mod.change_type}（{mod.reasoning}）")
     city = state.get("city", "")
@@ -517,15 +253,12 @@ def _run_modification(user_input: str, session: AgentSession,
     origin_coords = state.get("origin_coords")
     dest_coords = state.get("dest_coords")
 
-    # 恢复 session 基本状态
     session.city = city
     session.start_name = origin_name
 
     need_research = False
     need_regraph = False
-    need_renarrate = True
 
-    # 初始化为 None，由各分支填充
     valid_pois = None
     all_pois = None
 
@@ -534,14 +267,14 @@ def _run_modification(user_input: str, session: AgentSession,
 
     if change_type == "change_origin":
         new_origin = params.get("origin", "")
-        origin_coords, origin_name = _geocode_place(new_origin, city, user_input)
+        origin_coords, origin_name = geocode_place(new_origin, city, user_input)
         _progress("   →", f"起点更新为：{origin_name}")
         need_research = True
         need_regraph = True
 
     elif change_type == "change_destination":
         new_dest = params.get("destination", "")
-        dest_coords, dest_name = _geocode_place(new_dest, city, user_input, skip_names=[origin_name])
+        dest_coords, dest_name = geocode_place(new_dest, city, user_input, skip_names=[origin_name])
         _progress("   →", f"终点更新为：{dest_name}")
         need_research = True
         need_regraph = True
@@ -560,29 +293,52 @@ def _run_modification(user_input: str, session: AgentSession,
             need_regraph = True
 
     elif change_type == "change_preferences":
-        # 更新画像
-        from app.core.intent_agent import run_intent_agent
         updated_intent = run_intent_agent(user_input, city)
         profile_mgr.update_profile(updated_intent.user_profile)
         _progress("   →", f"偏好已更新：{updated_intent.preference_reasoning}")
-        need_renarrate = True  # 解说语气需要调整
+
+    elif change_type == "add_poi":
+        poi_name = params.get("poi_name", "")
+        _progress("   →", f"将「{poi_name}」加入路线中途")
+        num_stops = min(num_stops + 1, 8)
+        poi_coords, poi_name = geocode_place(poi_name, city, user_input)
+        if poi_coords:
+            existing = [p for p in (valid_pois or session.all_pois or [])]
+            existing.append({
+                "name": poi_name,
+                "lat": poi_coords[0], "lng": poi_coords[1],
+                "rating": 4.5,
+                "price_per_person": None,
+                "category": "用户指定",
+                "address": "",
+            })
+            valid_pois = existing
+            all_pois = existing
+            need_regraph = True
+        else:
+            _progress("⚠️", f"未能解析「{poi_name}」，将按关键词搜索")
+            anchor_strategy = SearchStrategy(regions=[
+                SearchRegion(center=poi_name, keywords=[poi_name], radius=2000, reason=f"用户指定「{poi_name}」")
+            ])
+            all_pois = execute_poi_search(anchor_strategy.regions, city, origin_coords, dest_coords)
+            valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+            _progress("   →", f"搜到 {len(valid_pois)} 个有效 POI")
+            need_regraph = True
 
     elif change_type == "change_poi_location":
         anchor = params.get("anchor", "")
         _progress("   →", f"在「{anchor}」附近重新搜索")
         if USE_POI_DB:
-            from app.core.intent_agent import run_intent_agent
             anchor_intent = run_intent_agent(
                 f"在{anchor}附近找 {keywords}", city
             )
-            all_pois = _recommend_pois_from_db(origin_coords, dest_coords, anchor_intent, city)
+            all_pois = recommend_pois_from_db(origin_coords, dest_coords, anchor_intent, city)
         else:
-            from app.core.poi_strategy_agent import SearchRegion, SearchStrategy
             anchor_strategy = SearchStrategy(regions=[
                 SearchRegion(center=anchor, keywords=keywords.split(","), radius=2000, reason=f"用户指定「{anchor}」附近")
             ])
-            all_pois = _execute_search(anchor_strategy.regions, city, origin_coords, dest_coords)
-        valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+            all_pois = execute_poi_search(anchor_strategy.regions, city, origin_coords, dest_coords)
+        valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("   →", f"搜到 {len(valid_pois)} 个有效 POI")
         need_regraph = True
 
@@ -595,19 +351,17 @@ def _run_modification(user_input: str, session: AgentSession,
     if need_research:
         _progress("🔍", "重新搜索 POI")
         if USE_POI_DB:
-            from app.core.intent_agent import run_intent_agent
             temp_intent = run_intent_agent(
                 f"{origin_name} → {dest_name}，搜索 {keywords}，{num_stops} 站", city
             )
-            all_pois = _recommend_pois_from_db(origin_coords, dest_coords, temp_intent, city)
-            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+            all_pois = recommend_pois_from_db(origin_coords, dest_coords, temp_intent, city)
+            valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         else:
-            from app.core.intent_agent import run_intent_agent
             temp_intent = run_intent_agent(
                 f"{origin_name} → {dest_name}，搜索 {keywords}，{num_stops} 站", city
             )
             strategy = build_search_strategy(temp_intent, origin_coords, dest_coords)
-            all_pois = _execute_search(strategy.regions, city, origin_coords, dest_coords)
+            all_pois = execute_poi_search(strategy.regions, city, origin_coords, dest_coords)
             if len(all_pois) < 3:
                 for kw in strategy.fallback_keywords:
                     try:
@@ -615,10 +369,9 @@ def _run_modification(user_input: str, session: AgentSession,
                     except AmapAPIError:
                         pass
                 all_pois = deduplicate_by_name(all_pois)
-            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
+            valid_pois = filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
         _progress("✅", f"搜索到 {len(valid_pois)} 个有效 POI")
 
-    # 未重新搜索则复用 session 中的 POI
     if valid_pois is None:
         valid_pois = session.all_pois or []
     if all_pois is None:
@@ -627,7 +380,7 @@ def _run_modification(user_input: str, session: AgentSession,
     if need_regraph:
         _progress("🗺️", "重新构建路线")
         time_budget = mod.params.get("time_budget_hours") if change_type == "adjust_constraint" else None
-        path_result = _run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
+        path_result = run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
                                         time_budget_hours=time_budget)
         if path_result is None:
             return "抱歉，调整后未能生成有效路线。请尝试换一个地点或放宽条件。", session
@@ -636,15 +389,11 @@ def _run_modification(user_input: str, session: AgentSession,
             if s["to"] not in (origin_name, dest_name, "终点")
         ]
     else:
-        # 重新加载已有结果
         path_result = session.path_result
         stop_names = session.stop_names
         if path_result is None:
             return "当前没有可修改的路线。请先规划一条新路线。", session
 
-    # ── 解说 + 审核 + 输出 ───────────────────────────
-    # 构造修改后的 IntentResult 给 narrator/reviewer
-    from app.core.types import UserProfile, IntentResult
     up = user_data.get("profile", {})
     profile = UserProfile(
         group_type=up.get("group_type", "solo"),
@@ -660,7 +409,7 @@ def _run_modification(user_input: str, session: AgentSession,
         raw_input=user_input,
     )
 
-    return _narrate_review_output(
+    return narrate_review_output(
         user_input, session, profile_mgr, user_data,
         origin_name, dest_name, city,
         origin_coords=origin_coords, dest_coords=dest_coords,
@@ -670,157 +419,3 @@ def _run_modification(user_input: str, session: AgentSession,
         num_stops=num_stops, keywords=keywords,
         intent_result=simple_intent,
     )
-
-
-# ── 解说 + 审核 + 输出（共用）─────────────────────────
-
-def _narrate_review_output(
-    user_input: str, session: AgentSession,
-    profile_mgr: UserProfileManager, user_data: dict,
-    origin_name: str, dest_name: str, city: str,
-    origin_coords, dest_coords,
-    all_pois: list, valid_pois: list,
-    path_result: dict, stop_names: list,
-    num_stops: int, keywords: str,
-    intent_result,
-) -> tuple:
-    """解说 → 审核 → Refine → HTML/Mermaid输出 → 保存画像."""
-
-    # Phase 2: NARRATE
-    _progress("📝", "Narrator Agent 生成个性化解说")
-    context = NarrationContext(
-        start_name=origin_name or "起点",
-        dest_name=dest_name,
-        city=city,
-        user_input=user_input,
-        path_segments=path_result["segments"],
-        total_duration_min=path_result["total_duration_min"],
-        total_distance_m=path_result["total_distance"],
-        user_profile=intent_result.user_profile,
-    )
-    narration = run_narrator(context)
-
-    # Phase 3: REVIEW & REFINE
-    review_loops = 0
-    review_result = None
-    while review_loops < MAX_REVIEW_LOOPS:
-        _progress("🔍", f"Reviewer Agent 审核路线（第{review_loops + 1}轮）")
-        review_result = run_reviewer(
-            start_name=origin_name or "起点", dest_name=dest_name,
-            city=city, user_input=user_input,
-            path_segments=path_result["segments"],
-            total_duration_min=path_result["total_duration_min"],
-            total_distance_m=path_result["total_distance"],
-            user_profile=intent_result.user_profile,
-            time_budget_hours=intent_result.time_budget_hours,
-        )
-        _progress("   →", f"评分：{review_result.overall_score}/5 — {review_result.summary}")
-        for iss in review_result.issues:
-            _progress("   →", f"[{iss.severity}] {iss.description}")
-
-        if not review_result.needs_retry:
-            _progress("✅", "审核通过")
-            break
-
-        _progress("🔄", "审核不通过，调整搜索策略重新规划...")
-        if USE_POI_DB:
-            # DB 路径：扩大推荐范围重新召回
-            new_pois = _recommend_pois_from_db(origin_coords, dest_coords, intent_result, city)
-            all_pois.extend(new_pois)
-            all_pois = deduplicate_by_name(all_pois)
-            valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
-            _progress("   →", f"补搜后共 {len(valid_pois)} 个有效 POI")
-        else:
-            adjusted = get_research_adjustments(review_result.retry_suggestions, intent_result)
-            if adjusted.regions:
-                new_pois = _execute_search(adjusted.regions, city, origin_coords, dest_coords)
-                all_pois.extend(new_pois)
-                all_pois = deduplicate_by_name(all_pois)
-                valid_pois = _filter_and_validate(all_pois, origin_name, dest_name, origin_coords, dest_coords)
-                _progress("   →", f"补搜后共 {len(valid_pois)} 个有效 POI")
-        new_path = _run_route_engine(origin_coords, valid_pois, dest_coords, num_stops,
-                                     time_budget_hours=intent_result.time_budget_hours)
-        if new_path:
-            path_result = new_path
-            context.path_segments = path_result["segments"]
-            context.total_duration_min = path_result["total_duration_min"]
-            context.total_distance_m = path_result["total_distance"]
-            narration = run_narrator(context)
-        review_loops += 1
-    else:
-        if review_result:
-            _progress("⚠️", f"已达最大审核轮数 ({MAX_REVIEW_LOOPS})，使用当前方案")
-
-    # Phase 4: OUTPUT
-    _progress("✅", "路线规划完成")
-
-    # 保存 session 状态
-    session.all_pois = all_pois
-    session.start_name = origin_name or "起点"
-    session.dest_name = dest_name
-    session.path_result = path_result
-    session.stop_names = stop_names
-    session._origin_coords = origin_coords
-    session._dest_coords = dest_coords
-    session._num_stops = num_stops
-    session._keywords = keywords
-    session._last_user_input = user_input
-    session._review_score = review_result.overall_score if review_result else 0
-
-    # Mermaid
-    if path_result and stop_names:
-        mermaid = _build_mermaid_from_path(session.start_name, path_result, stop_names)
-        if mermaid:
-            narration += f"\n\n---\n\n```mermaid\n{mermaid}\n```"
-            md_path = Path(__file__).parent.parent.parent / "data" / "output" / "route_output.md"
-            md_path.write_text(f"```mermaid\n{mermaid}\n```", encoding="utf-8")
-            _progress("🗺️", "路线图已保存")
-
-    # HTML
-    html = _build_route_html(
-        stop_names, all_pois, session.distance_info, city,
-        user_input, session.start_name,
-        start_coords=origin_coords, dest_name=dest_name, dest_coords=dest_coords,
-    )
-    if html:
-        html_path = Path(__file__).parent.parent.parent / "data" / "output" / "route_output.html"
-        html_path.write_text(html, encoding="utf-8")
-        _progress("🗺️", "交互地图已保存")
-
-    # ── 保存用户画像 ────────────────────────────────
-    # 收藏
-    if origin_name:
-        profile_mgr.add_to_favorites("origins", origin_name)
-    if dest_name:
-        profile_mgr.add_to_favorites("destinations", dest_name)
-    for s in stop_names:
-        profile_mgr.add_to_favorites("pois", s)
-    for kw in (keywords.split(",") if isinstance(keywords, str) else keywords):
-        profile_mgr.add_to_favorites("keywords", kw.strip())
-
-    # 历史
-    profile_mgr.add_history({
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "user_input": user_input,
-        "city": city,
-        "origin": origin_name or "未指定",
-        "destination": dest_name or "由路线决定",
-        "stops": stop_names,
-        "duration_min": path_result["total_duration_min"] if path_result else 0,
-        "review_score": review_result.overall_score if review_result else 0,
-    })
-
-    # Session 持久化
-    profile_mgr.save_session({
-        "city": city,
-        "origin": origin_name,
-        "origin_coords": list(origin_coords) if origin_coords else None,
-        "destination": dest_name,
-        "dest_coords": list(dest_coords) if dest_coords else None,
-        "last_stops": stop_names,
-        "num_stops": num_stops,
-        "keywords": keywords,
-        "last_user_input": user_input,
-    })
-
-    return narration, session

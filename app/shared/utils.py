@@ -30,6 +30,13 @@ class AgentSession:
         self.path_result = None
         self.nodes = []
         self.messages = []
+        # 持久化用 — 跨轮次恢复
+        self.origin_coords = None
+        self.dest_coords = None
+        self.num_stops = 3
+        self.keywords = "美食,景点"
+        self.last_user_input = ""
+        self.review_score = 0
 
 
 # ── 进度打印 ──────────────────────────────────────────

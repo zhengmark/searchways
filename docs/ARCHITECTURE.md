@@ -1,450 +1,224 @@
-# 架构文档 — "现在就出发" AI 路线规划
+# 架构文档 — "现在就出发" AI 本地路线智能规划
 
-> 面向程序员的落地指南：项目怎么跑起来、数据在哪、接口有哪些、如何扩展。
+> 美团 AI 黑客松项目。用户用自然语言描述出行需求，Agent 自动规划 POI 路线，输出 LLM 解说 + Mermaid 路线图 + Leaflet 交互地图。
 
 ---
 
 ## 1. 快速开始
 
 ```bash
-# 1. 安装依赖
-pip install -r requirements.txt
+pip install -r requirements.txt    # 安装依赖
+cp .env.example .env               # 编辑填入 LLM_API_KEY 和 AMAP_API_KEY
 
-# 2. 配置 API Key
-cp .env.example .env
-# 编辑 .env，填入 LLM_API_KEY 和 AMAP_API_KEY
-
-# 3. 启动 CLI
+# CLI 多轮对话
 python main.py
 
-# 4. 命令行跑一条路线
+# 命令行跑一条
 python3 -c "
 import sys; sys.path.insert(0, '.')
-from agent.multi_agent.orchestrator import run_multi_agent
-result, session = run_multi_agent('从丈八六路地铁站出发去钟楼吃', user_id='default')
+from app.core.orchestrator import run_multi_agent
+result, s = run_multi_agent('从丈八六路地铁站出发到浐灞玩', user_id='default')
 print(result)
 "
 
-# 5. 运行测试
-python3 test_user_scenarios.py    # 3 用户画像快速回归
-python3 test_ux_deep.py           # 5 用户画像深度体验
+# Web 服务
+python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8000
+
+# 运行测试（所有测试调真实 API）
+python3 tests/test_user_scenarios.py    # 3 画像快速回归
+python3 tests/test_ux_deep.py           # 5 画像深度体验
+python3 tests/test_graph.py             # 单条路线集成测试
 ```
+
+配置 `.env`：
+
+| 变量 | 用途 | 值 |
+|------|------|-----|
+| `LLM_API_KEY` | LLM API Key | LongCat / Anthropic |
+| `LLM_BASE_URL` | LLM API 地址 | `https://api.longcat.chat/anthropic` |
+| `LLM_MODEL` | 模型 | `LongCat-Flash-Chat` |
+| `AMAP_API_KEY` | 高德开放平台 Key | — |
+| `USE_POI_DB` | 启用本地 POI DB | `true` / `false`（默认） |
 
 ---
 
 ## 2. 目录结构
 
 ```
-/root/my-first-app/
-├── .env                          # API Key（不提交）
-├── .env.example                  # .env 模板
-├── requirements.txt              # Python 依赖
+my-first-app/
 ├── main.py                       # CLI 入口
-├── ARCHITECTURE.md               # ← 本文档
-├── CONTEXT.md                    # 踩坑记录 + 历史决策
-│
-├── agent/
-│   ├── config.py                 # 读 .env，导出 LLM_API_KEY / AMAP_API_KEY
-│   ├── llm_client.py             # ★ 共享 LLM 客户端（所有 Agent 共用）
-│   ├── models.py                 # 公共 Pydantic 模型：POI, RouteStop, Route, UserIntent
-│   ├── core.py                   # 旧 pipeline + 公共函数（_extract_city, _build_mermaid 等）
-│   ├── user_profile.py           # ★ 用户画像管理器（持久化、压缩、session）
+├── app/                          # 主 Python 包
+│   ├── config.py                 # 读取 .env 导出常量
+│   ├── llm_client.py             # 共享 LLM 客户端（全 Agent 单点复用）
+│   ├── models.py                 # Pydantic: POI, RouteStop, Route, UserIntent
+│   ├── user_profile.py           # 用户画像管理器（per-user JSON 持久化）
 │   │
-│   ├── multi_agent/              # ★ 多智能体架构
-│   │   ├── types.py              # Agent 间通信数据结构
+│   ├── core/                     # 多 Agent 编排
+│   │   ├── types.py              # Agent 间通信数据结构（IntentResult, ReviewResult 等）
 │   │   ├── orchestrator.py       # ★ 主控：Plan-Execute-Review-Refine + 多轮对话
-│   │   ├── intent_agent.py       # 意图理解 Agent
-│   │   ├── poi_strategy_agent.py # POI 搜索策略 + 质量评估 Agent
-│   │   ├── narrator_agent.py     # 个性化解说 Agent
-│   │   ├── reviewer_agent.py     # 路线质量审核 Agent
-│   │   └── modifier_agent.py     # ★ 修改意图识别 Agent（多轮对话）
+│   │   ├── intent_agent.py       # 意图 Agent — LLM 深度解析 + 画像推理
+│   │   ├── poi_strategy_agent.py # POI 策略 Agent — 搜索规划 + 质量评估
+│   │   ├── narrator_agent.py     # 解说 Agent — 个性化路线叙述
+│   │   ├── reviewer_agent.py     # 审核 Agent — 质量审计（最多 2 轮 refine）
+│   │   └── modifier_agent.py     # ★ 修改意图识别 — 9 类规则 + LLM 兜底
 │   │
-│   ├── tools/
-│   │   ├── constants.py          # 共享常量（关键词映射、黑名单、占位符）
-│   │   ├── geo.py                # 几何工具（haversine, project_ratio）
-│   │   ├── poi.py                # ★ 高德 API 封装（search_poi, geocode, robust_geocode）
-│   │   ├── poi_filter.py         # POI 过滤工具（去重、品类、坐标、距离）
-│   │   ├── graph_planner.py      # ★ 图算法（build_graph + shortest_path）
-│   │   ├── routing.py            # 步行距离计算（高德 walking API）
+│   ├── providers/                # 数据源抽象
+│   │   ├── base.py               # POIProvider 抽象接口
+│   │   └── amap_provider.py      # 高德 API 封装（search_poi, geocode, robust_geocode 等）
+│   │
+│   ├── algorithms/               # 纯算法
+│   │   ├── geo.py                # haversine(), project_ratio()
+│   │   ├── graph_planner.py      # ★ build_graph() + shortest_path()
+│   │   ├── poi_filter.py         # POI 过滤（去重/品类/坐标/距离）
+│   │   ├── routing.py            # 高德步行距离 API
 │   │   └── reviews.py            # 点评 API 骨架
 │   │
-│   └── static/                   # Leaflet HTML 模板
+│   ├── clustering/               # 离线聚类（DB 模式用）
+│   ├── recommender/              # 推荐引擎
+│   └── shared/                   # 共享工具
+│       ├── constants.py          # 关键词映射、品类黑名单、占位符
+│       └── utils.py              # AgentSession, _extract_city, _build_mermaid, _build_route_html
 │
-├── test/                         # 集成测试
-├── users/                        # 用户画像文件（不提交）→ users/{user_id}.json
-├── route_output.md               # 最后一次规划的 Mermaid 图
-└── route_output.html             # 最后一次规划的 Leaflet 地图
+├── db/                           # 本地 POI 数据库
+├── web/                          # Web 前端
+│   ├── server.py                 # ★ FastAPI 服务（/api/plan/stream SSE, /api/chat）
+│   ├── static/                   # CSS + Leaflet 静态资源
+│   └── templates/index.html      # 单页应用
+├── tests/                        # 集成测试
+├── data/
+│   ├── users/{user_id}.json      # 用户画像持久化
+│   └── output/                   # route_output.md / .html
+├── docs/                         # 文档
+└── scripts/                      # 工具脚本
 ```
 
 ---
 
-## 3. 核心数据流
+## 3. 核心流程
 
-### 3.1 多智能体 pipeline（完整规划）
+### 3.1 完整规划流程（新路线）
 
 ```
-用户输入 "从丈八六路出发去浐灞玩，3小时"
+用户输入 "从西安北站出发去曲江玩，3小时"
   │
   ├─ 1. 城市提取      _extract_city() → regex 匹配 300+ 城市列表
-  ├─ 2. Intent Agent   LLM 深度解析 → IntentResult
-  │      ├─ origin / destination / keywords / num_stops
-  │      ├─ UserProfile (group_type, energy_level, budget_level, interests)
-  │      └─ time_budget_hours, search_hints
-  ├─ 3. 地理编码       robust_geocode() → 4 层兜底 + 正则回退
-  ├─ 4. POI Strategy   build_search_strategy() → 搜索区域 + 关键词
-  │      └─ 执行搜索 → Amap text/around/along_route API
-  │      └─ POI 质量评估 → 不足时自动补搜
-  ├─ 5. Route Engine   build_graph() + shortest_path()
-  │      └─ 全连接图 → 连线投影分段选取 → 200m 最小间距
-  │      └─ 时间预算约束（超出 20% 自动减站）
-  ├─ 6. Narrator Agent LLM 个性化解说
-  ├─ 7. Reviewer Agent 质量审核（最多 2 轮 refine）
-  │      └─ 不通过 → 调整搜索策略 → 重新规划
-  └─ 8. Output
-       ├─ 文本回复
-       ├─ Mermaid 路线图 → route_output.md
-       ├─ Leaflet 地图 → route_output.html
-       └─ 保存用户画像 → users/{user_id}.json
+  ├─ 2. Intent Agent  LLM 深度解析 → IntentResult {origin, destination, keywords, UserProfile, ...}
+  ├─ 3. 地理编码      robust_geocode() 起终点 → 4 层兜底 + 正则回退
+  │
+  ├─ 4. POI 获取 ─── 两路径，由 .env 中 USE_POI_DB 控制 ───
+  │   ├─ DB 模式:  _recommend_pois_from_db() → 预计算簇召回 → 推荐引擎排序
+  │   └─ API 模式: build_search_strategy() (LLM) → Amap 搜索 → evaluate_pois() (LLM) → 自动补搜
+  │
+  ├─ 5. Route Engine  build_graph() (全连接邻接矩阵, ThreadPool 并发) → shortest_path()
+  │      └─ 投影分段选取：POI 投影到起终点连线 → 均分 N 段 → 每段取评分最高者 (500m 互斥)
+  │      └─ 时间预算约束：超出 20% 自动减站
+  │
+  ├─ 6. Narrator      LLM 个性化解说（基于 UserProfile 调整语气）
+  ├─ 7. Reviewer      LLM 质量审核 → 最多 2 轮 refine（补搜 + 重规划）
+  │
+  └─ 8. Output        文本 + Mermaid 图 → route_output.md
+                       Leaflet 交互地图 → route_output.html
+                       用户画像 → data/users/{user_id}.json
 ```
 
 ### 3.2 多轮对话流程
 
 ```
-用户第2轮输入 "不去钟楼了，换成大雁塔"
+用户 "加入大兴善寺"
   │
   ├─ modifier_agent.detect_modification()
-  │     ├─ 规则匹配优先（正则，8 类修改意图）
-  │     └─ LLM 兜底（模糊表达）
+  │     ├─ 规则优先: 9 类正则（起点/终点/添加POI/关键词/站点数/偏好/位置/约束/新路线）
+  │     └─ LLM 兜底: 复杂/模糊表达
   │
-  ├─ 识别为 change_destination
-  │     └─ 只重跑：geocode → POI 搜索 → 建图 → 解说 → 审核
-  │
-  ├─ 其他修改类型：
-  │     ├─ change_origin        → geocode + 重新搜索 + 建图
-  │     ├─ change_keywords      → 重新搜索 + 建图
-  │     ├─ change_num_stops     → 只重建图
-  │     ├─ change_preferences   → 更新画像 + 重新解说
+  ├─ 增量修改（只重跑受影响环节）
+  │     ├─ change_origin        → geocode + 搜索 + 建图
+  │     ├─ change_destination   → geocode + 搜索 + 建图
+  │     ├─ add_poi              → geocode 指定地点 → 插入候选池 → num_stops+1 → 建图
+  │     ├─ change_keywords      → 搜索 + 建图
+  │     ├─ change_num_stops     → 建图
+  │     ├─ change_preferences   → 更新画像 + 解说
   │     ├─ change_poi_location  → 新区域搜索 + 建图
-  │     ├─ adjust_constraint    → 重新建图（时间约束）
+  │     ├─ adjust_constraint    → 建图（时间约束）
   │     └─ new_route            → 完整重规划
   │
-  └─ 每轮结束保存 session + history + favorites
+  └─ 每轮结束: 保存 session + history + favorites
 ```
 
 ---
 
-## 4. 关键接口
+## 4. 关键设计决策
 
-### 4.1 主入口 —— `run_multi_agent()`
+### 4.1 算法选路径，LLM 做表达
 
-```python
-from agent.multi_agent.orchestrator import run_multi_agent
+LLM 对空间关系/距离/交通时间无感知。路径选择全由算法完成（haversine + 步行 API + 投影分段），LLM 只负责意图解析和个性化解说。
 
-# 新用户 / 第一轮对话
-result_text, session = run_multi_agent(
-    user_input="从丈八六路出发去钟楼吃",
-    user_id="default",      # 后续接入登录后改为 login_state.user_id
-)
+### 4.2 投影分段选取（解决 POI 扎堆）
 
-# 多轮对话（同一 session）
-result_text, session = run_multi_agent(
-    user_input="不去钟楼了，去大雁塔",
-    session=session,        # 传入上一轮的 session
-    user_id="default",
-)
-```
+POI 投影到起终点连线上 → 均分 N 段 → 每段独立选取（品类多样优先，评分次之，500m 内互斥）。避免了基于"最近邻"的贪心算法全部扎堆起点的固有问题。
 
-### 4.2 用户画像管理 —— `UserProfileManager`
+### 4.3 混合修改意图识别
 
-```python
-from agent.user_profile import UserProfileManager
+规则（正则）覆盖 ~90% 常见修改，毫秒级响应，确定性输出。LLM 兜底处理模糊表达（"换一种风格吧"）。混合策略兼顾速度和覆盖率。
 
-mgr = UserProfileManager(user_id="default")
+### 4.4 Python falsy 显式检查
 
-# 读画像
-data = mgr.load()           # → dict，文件不存在时自动创建默认画像
+高德 API 对无坐标 POI 返回 `location="0,0"`，`float("0")=0.0` 是 Python falsy。所有坐标判空必须用 `is not None`，否则误杀有效数据（赤道附近有真实 0.0 坐标）。
 
-# 更新画像字段
-from agent.multi_agent.types import UserProfile
-profile = UserProfile(
-    group_type="family",
-    energy_level="low",
-    interests=["美食", "亲子"],
-    notes="带小孩，需要无障碍通道",
-)
-mgr.update_profile(profile)
+### 4.5 地名子串匹配
 
-# 收藏管理
-mgr.add_to_favorites("pois", "回民街")
-mgr.add_to_favorites("keywords", "咖啡")
-
-# 历史记录
-mgr.add_history({
-    "user_input": "从丈八六路出发去浐灞玩",
-    "city": "西安",
-    "origin": "丈八六路地铁站",
-    "destination": "浐灞",
-    "stops": ["回民街", "大雁塔"],
-    "duration_min": 58,
-    "review_score": 4.5,
-})
-
-# 会话持久化（跨重启恢复多轮对话）
-mgr.save_session({"city": "西安", "origin": "丈八六路", ...})
-session_data = mgr.load_session()  # → dict | {}
-
-# 重置用户所有数据
-mgr.reset()
-```
-
-### 4.3 LLM 客户端 —— `call_llm()`
-
-```python
-from agent.llm_client import call_llm
-
-response = call_llm(
-    messages=[{"role": "user", "content": "你好"}],
-    system="你是一个助手",
-    max_tokens=200,
-)
-# → {"content": [{"text": "..."}], ...}
-```
-
-### 4.4 高德 API —— `agent/tools/poi.py`
-
-```python
-from agent.tools.poi import (
-    search_poi, search_around, search_along_route,
-    geocode, robust_geocode, input_tips, AmapAPIError,
-)
-
-# 搜索 POI（返回 list[dict]）
-pois = search_poi(keywords="美食", location="西安", limit=10)
-
-# 周边搜索
-pois = search_around("108.94,34.26", "咖啡", radius=2000)
-
-# 沿途搜索
-pois = search_along_route("108.94,34.26", "109.01,34.31", "美食")
-
-# 地理编码（4 层兜底）
-lat, lng = robust_geocode("丈八四路地铁站", "西安")
-
-# 异常处理
-try:
-    pois = search_poi(keywords="xxx", location="xxx")
-except AmapAPIError as e:
-    print(f"Amap 错误: {e}")
-```
-
-### 4.5 图算法 —— `agent/tools/graph_planner.py`
-
-```python
-from agent.tools.graph_planner import build_graph, shortest_path
-
-# 建图
-nodes, graph = build_graph(origin_coords, poi_list, dest_coords)
-# 返回：nodes=[Node, ...], graph={(i,j): (distance_m, duration_s)}
-
-# 最短路径（投影分段选取）
-path = shortest_path(graph, nodes, num_stops=3)
-# 返回：
-# {
-#     "segments": [{"from": "起点", "to": "回民街", "distance_m": 3200, "duration_min": 38, "transport": "公交"}, ...],
-#     "total_duration_min": 58,
-#     "total_distance": 12300,
-# }
-```
-
-### 4.6 修改意图识别 —— `detect_modification()`
-
-```python
-from agent.multi_agent.modifier_agent import detect_modification, ModificationIntent
-
-intent = detect_modification(
-    user_input="不去钟楼了，去大雁塔",
-    current_context={
-        "city": "西安",
-        "origin": "丈八六路",
-        "destination": "钟楼",
-        "num_stops": 3,
-        "keywords": "美食,景点",
-    },
-)
-
-# intent.change_type  → "change_destination"
-# intent.params       → {"destination": "大雁塔"}
-# intent.confidence   → 1.0（规则匹配）或 0.7（LLM 兜底）
-# intent.reasoning    → "规则匹配: ..."
-```
+用 `name in tip_name or tip_name in name` 而非字符重叠率。字符重叠法下"四路地铁站"会误配到"凤城四路店"。
 
 ---
 
-## 5. 数据存储
+## 5. Web 前端
 
-### 5.1 用户画像文件
+FastAPI 单页应用，端口 8000，两个核心 API：
 
-**位置**: `users/{user_id}.json`（例如 `users/default.json`）
+| 端点 | 说明 |
+|------|------|
+| `POST /api/plan/stream` | SSE 流式规划 — 推送进度事件 + 最终结果 |
+| `POST /api/chat` | 多轮对话修改 — 返回 JSON 结果 |
+| `GET /api/health` | 健康检查 |
 
-**完整结构**:
-
-```json
-{
-  "user_id": "default",
-  "created_at": "2026-05-02T10:00:00+00:00",
-  "updated_at": "2026-05-02T12:30:00+00:00",
-  "profile": {
-    "group_type": "solo",
-    "age_preference": "all",
-    "energy_level": "medium",
-    "budget_level": "medium",
-    "interests": ["美食", "文化"],
-    "notes": ""
-  },
-  "favorites": {
-    "origins": ["丈八六路地铁站"],
-    "destinations": ["钟楼"],
-    "pois": ["回民街"],
-    "keywords": ["美食", "咖啡"]
-  },
-  "history": [
-    {
-      "timestamp": "2026-05-02T10:30:00+00:00",
-      "user_input": "从丈八六路出发去浐灞玩",
-      "city": "西安",
-      "origin": "丈八六路地铁站",
-      "destination": "浐灞",
-      "stops": ["回民街", "大雁塔"],
-      "duration_min": 58,
-      "review_score": 4.5
-    }
-  ],
-  "session": {
-    "city": "西安",
-    "origin": "丈八六路地铁站",
-    "origin_coords": [34.261, 108.940],
-    "destination": "钟楼",
-    "dest_coords": [34.260, 108.942],
-    "last_stops": ["回民街", "大雁塔"],
-    "num_stops": 3,
-    "keywords": "美食,景点",
-    "last_user_input": "从丈八六路出发去钟楼吃"
-  }
-}
-```
-
-### 5.2 压缩策略
-
-- 文件上限 **256KB**（`_MAX_FILE_BYTES`）
-- 超出时按时间保留最新历史记录（二分查找压缩边界）
-- `profile` 和 `session` 不参与压缩（始终保留）
-- 收藏列表每类最多 20 条
-- 历史记录软上限 100 条
-
-### 5.3 恢复上次会话
-
-```python
-mgr = UserProfileManager(user_id="default")
-saved = mgr.load_session()
-# saved = {"city": "西安", "origin": "丈八六路", ...}
-# 可以据此恢复 session 状态，继续多轮对话
-```
+前端使用 Leaflet.js + Mermaid.js 渲染交互地图和路线图。地图通过 `position: relative; z-index: 0` 隔离 Leaflet 内部高 z-index，避免覆盖 sticky 输入框。
 
 ---
 
-## 6. 配置
+## 6. 扩展指南
 
-`.env` 文件：
+### 添加新的 POI 数据源
 
-| 变量 | 用途 | 示例 |
-|------|------|------|
-| `LLM_API_KEY` | LongCat / Anthropic API Key | `ak_2R67S24...` |
-| `LLM_BASE_URL` | LLM API 地址 | `https://api.longcat.chat/anthropic` |
-| `LLM_MODEL` | 模型名 | `LongCat-Flash-Lite` |
-| `AMAP_API_KEY` | 高德开放平台 Key | `xxxx` |
-| `DIANPING_APP_KEY` | 大众点评 API Key（占位） | — |
-| `DIANPING_APP_SECRET` | 大众点评 Secret（占位） | — |
+在 `app/providers/` 下实现 `POIProvider` 抽象接口（参考 `amap_provider.py`），然后在 `orchestrator.py` 中切换。
 
-`agent/config.py` 读取这些变量，导出为大写下划线常量。
+### 添加新的修改意图类型
 
----
+1. `modifier_agent.py` → `_ALL_RULES` 添加正则，`detect_by_rules()` 添加参数提取
+2. `modifier_agent.py` → `_MODIFIER_SYSTEM` prompt 补充类型说明
+3. `orchestrator.py` → `_run_modification()` 添加处理分支
 
-## 7. Agent 间通信协议
+### 接入登录系统
 
-所有 Agent 通过 `agent/multi_agent/types.py` 中定义的 Pydantic 模型通信：
+`UserProfileManager(user_id=login_state.user_id)` — 只需改 user_id 参数。
 
-```
-Intent Agent    → IntentResult (origin, destination, keywords, UserProfile, time_budget_hours)
-POI Strategy    → SearchStrategy (List[SearchRegion]), PoiQualityReport
-Route Engine    → dict (path_result from graph_planner)
-Narrator Agent  ← NarrationContext (path info + user_profile)
-Reviewer Agent  → ReviewResult (overall_score, List[ReviewIssue], needs_retry)
-Modifier Agent  → ModificationIntent (change_type, params, confidence)
-```
+### 启用本地 POI DB
+
+在 `.env` 设 `USE_POI_DB=true`。走预计算聚类 + 推荐引擎路径，跳过 3 次 LLM 调用 + N 次 Amap 搜索，规划时间减半。
 
 ---
 
-## 8. 如何扩展
+## 7. 测试
 
-### 8.1 接入登录系统
+所有测试均为集成测试（调真实 API），运行会消耗 LLM + 高德 API 配额。
 
-只需改一行：
-
-```python
-# 现在
-mgr = UserProfileManager(user_id="default")
-
-# 接入后
-mgr = UserProfileManager(user_id=login_state.user_id)
-```
-
-`UserProfileManager` 已内置完整接口文档（见文件头部 docstring），无需修改任何其他代码。
-
-### 8.2 添加新的修改意图类型
-
-在 `agent/multi_agent/modifier_agent.py` 中：
-
-1. 添加正则规则到 `_ALL_RULES`
-2. 在 `detect_by_rules()` 中添加参数提取逻辑
-3. 在 `orchestrator.py` 的 `_run_modification()` 中添加处理分支
-
-### 8.3 添加新的 Agent
-
-1. 在 `agent/multi_agent/` 下创建 `xxx_agent.py`
-2. 在 `types.py` 中定义输入输出 Pydantic 模型
-3. 在 `orchestrator.py` 中引入并编排到 pipeline
-
-### 8.4 接入点评/美团 API
-
-在 `agent/tools/reviews.py` 的 `fetch_reviews()` 骨架中实现，然后在 `poi_strategy_agent.py` 中调用，丰富 POI 评分来源。
+| 文件 | 说明 |
+|------|------|
+| `tests/test_user_scenarios.py` | 3 画像快速回归 |
+| `tests/test_ux_deep.py` | 5 画像深度体验（评分卡） |
+| `tests/test_graph.py` | 单条路线集成 |
+| `tests/test_longcat.py` | LLM API 连通性 |
+| `tests/test_amap.py` | 高德 API 连通性 |
+| `tests/test_routing.py` | 步行 API 连通性 |
 
 ---
 
-## 9. 常用命令
-
-```bash
-# 运行 CLI
-python main.py
-
-# 测试
-python3 test_user_scenarios.py    # 3 画像快速回归
-python3 test_ux_deep.py           # 5 画像深度体验
-python3 test_graph.py             # 单条路线集成测试
-python3 test_longcat.py           # LLM API 连通性
-python3 test_amap.py              # 高德 API 连通性
-
-# 单独测试 geocode
-python3 -c "
-import sys; sys.path.insert(0, '.')
-from agent.tools.poi import robust_geocode
-print(robust_geocode('丈八四路地铁站', '西安'))
-"
-
-# 查看输出
-cat route_output.md
-python3 -m http.server 8000       # 浏览器打开 localhost:8000/route_output.html
-```
-
----
-
-*最后更新：2026-05-02*
+*最后更新：2026-05-08*
