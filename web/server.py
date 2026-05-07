@@ -72,9 +72,15 @@ def _build_response(narration_text: str, session: AgentSession, session_id: str)
             to_name = seg["to"]
             # 从 all_pois 查找坐标
             info = _find_poi(to_name, session.all_pois)
+            lat = info.get("lat")
+            lng = info.get("lng")
+            # 终点坐标回退到 dest_coords
+            dest_coords = getattr(session, '_dest_coords', None)
+            if lat is None and dest_coords and to_name == (session.dest_name or ""):
+                lat, lng = dest_coords[0], dest_coords[1]
             stops.append({
                 "name": to_name,
-                "lat": info.get("lat"), "lng": info.get("lng"),
+                "lat": lat, "lng": lng,
                 "rating": info.get("rating"),
                 "price": info.get("price_per_person"),
                 "address": info.get("address", ""),
@@ -90,6 +96,8 @@ def _build_response(narration_text: str, session: AgentSession, session_id: str)
         "city": session.city,
         "total_duration_min": path["total_duration_min"] if path else 0,
         "total_distance_m": path.get("total_distance", 0) if path else 0,
+        "review_score": getattr(session, '_review_score', None),
+        "dest_coords": list(getattr(session, '_dest_coords', None) or ()) or None,
     }
 
 

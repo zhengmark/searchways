@@ -34,6 +34,7 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
             "type": "poi",
             "rating": p.get("rating"),
             "price": p.get("price_per_person"),
+            "category": p.get("category", ""),
         })
 
     has_dest = destination is not None
@@ -101,29 +102,36 @@ def shortest_path(graph: list, nodes: list, num_stops: int) -> dict:
         for p in poi_nodes:
             t = project_ratio(p["lat"], p["lng"], origin, dest)
             rating = p.get("rating") or 3.0
-            scored.append((t, rating, p["id"]))
+            scored.append((t, rating, p["id"], p.get("category", "")))
 
         scored.sort(key=lambda x: x[0])
 
         selected = []
+        picked_cats = set()
         for i in range(num_stops):
             lo = i * len(scored) // num_stops
             hi = (i + 1) * len(scored) // num_stops
             seg = scored[lo:hi]
             if not seg:
                 continue
-            seg_sorted = sorted(seg, key=lambda x: -x[1])
+            # 排序：品类多样优先，同品类按评分
+            def _seg_key(x):
+                cat_bonus = 0 if x[3] in picked_cats else 1
+                return -(x[1] + cat_bonus * 0.5)
+            seg_sorted = sorted(seg, key=_seg_key)
             best = None
-            for _, _, pid in seg_sorted:
+            for _, _, pid, cat in seg_sorted:
                 too_close = any(
                     graph[pid][sid] and graph[pid][sid]["distance"] < 200
                     for sid in selected
                 )
                 if not too_close:
                     best = pid
+                    picked_cats.add(cat)
                     break
             if best is None:
                 best = seg_sorted[0][2]
+                picked_cats.add(seg_sorted[0][3])
             selected.append(best)
     else:
         if num_stops == 0:
@@ -133,28 +141,36 @@ def shortest_path(graph: list, nodes: list, num_stops: int) -> dict:
             for p in poi_nodes:
                 e = graph[0][p["id"]]
                 d = e["distance"] if e else float("inf")
-                dists.append((d, p.get("rating") or 3.0, p["id"]))
+                dists.append((d, p.get("rating") or 3.0, p["id"], p.get("category", "")))
             dists.sort(key=lambda x: x[0])
 
             selected = []
+            picked_cats = set()
             for i in range(num_stops):
                 lo = i * len(dists) // num_stops
                 hi = (i + 1) * len(dists) // num_stops
                 seg = dists[lo:hi]
                 if not seg:
                     continue
-                seg_sorted = sorted(seg, key=lambda x: -x[1])
+
+                def _seg_key2(x):
+                    cat_bonus = 0 if x[3] in picked_cats else 1
+                    return -(x[1] + cat_bonus * 0.5)
+
+                seg_sorted = sorted(seg, key=_seg_key2)
                 best = None
-                for _, _, pid in seg_sorted:
+                for _, _, pid, cat in seg_sorted:
                     too_close = any(
                         graph[pid][sid] and graph[pid][sid]["distance"] < 200
                         for sid in selected
                     )
                     if not too_close:
                         best = pid
+                        picked_cats.add(cat)
                         break
                 if best is None:
                     best = seg_sorted[0][2]
+                    picked_cats.add(seg_sorted[0][3])
                 selected.append(best)
 
     path = [0]

@@ -156,7 +156,7 @@ def _search_along_route(conn, origin: str, dest: str, keywords: str, radius: int
 
 def _row_to_dict(row) -> dict:
     """sqlite3.Row → dict."""
-    return {
+    d = {
         "amap_id": row["amap_id"],
         "name": row["name"],
         "address": row["address"] or "",
@@ -169,6 +169,9 @@ def _row_to_dict(row) -> dict:
         "city": row["city"] or "",
         "district": row["district"] or "",
     }
+    if "cluster_id" in row.keys():
+        d["cluster_id"] = row["cluster_id"]
+    return d
 
 
 class POIRepository(POIProvider):

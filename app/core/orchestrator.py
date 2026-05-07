@@ -120,42 +120,67 @@ def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
     if not origin_coords and not dest_coords:
         return []
 
-    ref_lat = origin_coords[0] if origin_coords else dest_coords[0]
-    ref_lng = origin_coords[1] if origin_coords else dest_coords[1]
+    o_lat = origin_coords[0] if origin_coords else dest_coords[0]
+    o_lng = origin_coords[1] if origin_coords else dest_coords[1]
+    d_lat = dest_coords[0] if dest_coords else None
+    d_lng = dest_coords[1] if dest_coords else None
 
+    import math
     with get_conn() as conn:
-        # 1. 查最近 5 个预计算簇
-        nearby = query_clusters(ref_lat, ref_lng, limit=5)
-        if nearby:
-            cids = [c["cluster_id"] for c in nearby]
-            placeholders = ",".join("?" * len(cids))
-            rows = conn.execute(
-                f"""SELECT * FROM pois
-                    WHERE cluster_id IN ({placeholders}) AND lat IS NOT NULL
-                    ORDER BY rating DESC NULLS LAST
-                    LIMIT 300""",
-                cids,
+        seen_amap = set()
+        all_rows = []
+
+        def _add_rows(rows):
+            for r in rows:
+                if r["amap_id"] not in seen_amap:
+                    seen_amap.add(r["amap_id"])
+                    all_rows.append(r)
+
+        # 1. 起点附近预计算簇
+        for c in query_clusters(o_lat, o_lng, limit=5):
+            c_rows = conn.execute(
+                "SELECT * FROM pois WHERE cluster_id = ? AND lat IS NOT NULL LIMIT 60",
+                (c["cluster_id"],),
             ).fetchall()
+            _add_rows(c_rows)
+
+        # 2. 终点附近预计算簇
+        if d_lat is not None:
+            for c in query_clusters(d_lat, d_lng, limit=5):
+                c_rows = conn.execute(
+                    "SELECT * FROM pois WHERE cluster_id = ? AND lat IS NOT NULL LIMIT 60",
+                    (c["cluster_id"],),
+                ).fetchall()
+                _add_rows(c_rows)
+
+        # 3. 走廊 bbox（始终执行，保证空间覆盖）
+        margin_km = 5.0
+        if d_lat is not None:
+            lat_min = min(o_lat, d_lat) - margin_km / 111.32
+            lat_max = max(o_lat, d_lat) + margin_km / 111.32
+            mid_lat = (o_lat + d_lat) / 2
+            lng_span = margin_km / (111.32 * math.cos(math.radians(mid_lat)))
+            lng_min = min(o_lng, d_lng) - lng_span
+            lng_max = max(o_lng, d_lng) + lng_span
         else:
-            rows = []
+            lat_span = margin_km / 111.32
+            lng_span = margin_km / (111.32 * math.cos(math.radians(o_lat)))
+            lat_min, lat_max = o_lat - lat_span, o_lat + lat_span
+            lng_min, lng_max = o_lng - lng_span, o_lng + lng_span
 
-        # 2. 兜底：预计算簇不足时用 bbox 查询
-        if len(rows) < 10:
-            radius_km = 5.0
-            import math
-            lat_span = radius_km / 111.32
-            lng_span = radius_km / (111.32 * math.cos(math.radians(ref_lat)))
-            rows = conn.execute("""
-                SELECT * FROM pois
-                WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
-                  AND lat IS NOT NULL
-                ORDER BY rating DESC NULLS LAST
-                LIMIT 300
-            """, (ref_lat - lat_span, ref_lat + lat_span, ref_lng - lng_span, ref_lng + lng_span)).fetchall()
+        corridor_rows = conn.execute("""
+            SELECT * FROM pois
+            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
+              AND lat IS NOT NULL
+            ORDER BY rating DESC NULLS LAST
+            LIMIT 300
+        """, (lat_min, lat_max, lng_min, lng_max)).fetchall()
+        _add_rows(corridor_rows)
 
-        pois = [_row_to_dict(r) for r in rows]
+        pois = [_row_to_dict(r) for r in all_rows]
 
-    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI（{len(nearby)} 个预计算簇）")
+    n_clusters = len({p.get("cluster_id") for p in pois if p.get("cluster_id") is not None})
+    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI（{n_clusters} 个预计算簇）")
 
     # 3. 按预计算 cluster_id 构造簇（跳过实时聚类）
     clusters_by_id = {}
@@ -196,7 +221,8 @@ def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
         target_cats.extend(expanded.split(","))
 
     ranked = recommend(
-        pois, ref_lat, ref_lng,
+        pois, o_lat, o_lng,
+        d_lat=d_lat, d_lng=d_lng,
         clusters=clusters,
         target_categories=target_cats or ["美食", "景点"],
         user_prefs=user_prefs,
@@ -739,6 +765,7 @@ def _narrate_review_output(
     session._num_stops = num_stops
     session._keywords = keywords
     session._last_user_input = user_input
+    session._review_score = review_result.overall_score if review_result else 0
 
     # Mermaid
     if path_result and stop_names:
