@@ -20,7 +20,8 @@ from app.core.narrator_agent import run_narrator, NarrationContext
 from app.core.reviewer_agent import run_reviewer
 from app.core.modifier_agent import detect_modification
 
-from app.providers.amap_provider import search_poi, search_around, search_along_route, geocode, robust_geocode, AmapAPIError
+from app.providers.amap_provider import geocode, robust_geocode, AmapAPIError
+from app.providers.provider import search_poi, search_around, search_along_route
 from app.algorithms.graph_planner import build_graph, shortest_path, decide_transport
 from app.algorithms.poi_filter import normalize_keywords, filter_by_category, filter_by_coords, filter_near_anchor, deduplicate_by_name
 from app.algorithms.geo import haversine

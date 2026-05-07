@@ -11,3 +11,5 @@ LLM_MODEL = os.getenv("LLM_MODEL", "LongCat-Flash-Lite")
 AMAP_API_KEY = os.getenv("AMAP_API_KEY", "")
 DIANPING_APP_KEY = os.getenv("DIANPING_APP_KEY", "")
 DIANPING_APP_SECRET = os.getenv("DIANPING_APP_SECRET", "")
+
+USE_POI_DB = os.getenv("USE_POI_DB", "false").lower() == "true"

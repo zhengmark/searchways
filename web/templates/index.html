@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>现在就出发 - AI 本地路线智能规划</title>
+  <link rel="stylesheet" href="/static/assets/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────── -->
+  <header class="header">
+    <h1>现在就出发</h1>
+    <p class="tagline">让 AI 在信息高度不确定的条件下，输出可用的结构化路线</p>
+  </header>
+
+  <main class="main">
+
+    <!-- ── 输入区 ────────────────────────── -->
+    <section class="input-section">
+      <div class="input-row">
+        <input type="text" id="userInput"
+               placeholder="用自然语言描述你的出行需求，例如：从丈八六路地铁站出发到浐灞玩一天..."
+               autofocus>
+        <button id="planBtn" onclick="planRoute()">规划路线</button>
+      </div>
+      <div class="quick-tags">
+        <button class="tag" onclick="setTag('美食之旅')">美食</button>
+        <button class="tag" onclick="setTag('骑行放松')">骑行</button>
+        <button class="tag" onclick="setTag('亲子出游')">亲子</button>
+        <button class="tag" onclick="setTag('约会路线')">约会</button>
+        <button class="tag" onclick="setTag('文化探索')">文化</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <!-- ── 结果区 ─────────────────────────── -->
+    <section id="resultArea" class="result-area" style="display:none">
+      <div class="result-grid">
+        <div id="map" class="map-panel"></div>
+        <div class="narration-panel">
+          <div id="narration" class="narration-text"></div>
+          <div id="mermaid" class="mermaid-diagram"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 历史区 ─────────────────────────── -->
+    <section class="history-section">
+      <details>
+        <summary>历史路线</summary>
+        <div id="historyList" class="history-list">暂无记录</div>
+      </details>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    美团 AI 黑客松 · 现在就出发
+  </footer>
+
+  <script src="/static/assets/leaflet/leaflet.js"></script>
+  <script>
+    let map = null;
+
+    function setTag(text) {
+      document.getElementById('userInput').value = text;
+    }
+
+    async function planRoute() {
+      const input = document.getElementById('userInput').value.trim();
+      if (!input) return;
+
+      const status = document.getElementById('status');
+      const btn = document.getElementById('planBtn');
+      status.textContent = '规划中...';
+      btn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: input }),
+        });
+        const data = await resp.json();
+        status.textContent = '规划完成';
+        btn.disabled = false;
+        showResult(data);
+      } catch (err) {
+        status.textContent = '规划失败：' + err.message;
+        btn.disabled = false;
+      }
+    }
+
+    function showResult(data) {
+      document.getElementById('resultArea').style.display = 'block';
+      document.getElementById('narration').innerHTML = data.narration || '暂无解说';
+      document.getElementById('mermaid').innerHTML = data.mermaid || '';
+
+      if (data.stops && data.stops.length > 0 && !map) {
+        map = L.map('map').setView([data.stops[0].lat || 34.26, data.stops[0].lng || 108.94], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap'
+        }).addTo(map);
+      }
+      if (map && data.stops) {
+        map.eachLayer(l => { if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l); });
+        const markers = data.stops.filter(s => s.lat && s.lng).map(s =>
+          L.marker([s.lat, s.lng]).bindPopup(s.name).addTo(map)
+        );
+        if (markers.length > 1) {
+          L.polyline(markers.map(m => m.getLatLng()), { color: '#2563eb' }).addTo(map);
+        }
+        const group = new L.featureGroup(markers);
+        if (markers.length) map.fitBounds(group.getBounds().pad(0.1));
+      }
+    }
+  </script>
+</body>
+</html>
