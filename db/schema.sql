@@ -14,11 +14,13 @@ CREATE TABLE IF NOT EXISTS pois (
     price_per_person REAL,               -- biz_ext.cost
     city TEXT DEFAULT '西安',
     district TEXT DEFAULT '',
+    cluster_id INTEGER DEFAULT NULL,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_pois_amap_id ON pois(amap_id);
+CREATE INDEX IF NOT EXISTS idx_pois_cluster_id ON pois(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_pois_city ON pois(city);
 CREATE INDEX IF NOT EXISTS idx_pois_category ON pois(category);
 CREATE INDEX IF NOT EXISTS idx_pois_latlng ON pois(lat, lng);

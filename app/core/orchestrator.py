@@ -111,10 +111,10 @@ def _execute_search(strategy_regions: list, city: str, origin_coords=None, dest_
 
 def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
                             city: str = "") -> list:
-    """使用推荐引擎从本地 DB 召回 + 排序 POI."""
+    """使用预计算聚类 + 推荐引擎从本地 DB 召回 + 排序 POI."""
     from db.connection import get_conn
     from db.repository import _row_to_dict
-    from app.clustering.geo_cluster import geo_cluster
+    from db.cluster import query_clusters
     from app.recommender.engine import recommend
 
     if not origin_coords and not dest_coords:
@@ -123,38 +123,65 @@ def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
     ref_lat = origin_coords[0] if origin_coords else dest_coords[0]
     ref_lng = origin_coords[1] if origin_coords else dest_coords[1]
 
-    # 从 DB 加载 POI（周边 5km 矩形范围）
-    radius_km = 5.0
-    lat_span = radius_km / 111.32
-    lng_span = radius_km / (111.32 * __import__("math").cos(__import__("math").radians(ref_lat)))
-    lat_min, lat_max = ref_lat - lat_span, ref_lat + lat_span
-    lng_min, lng_max = ref_lng - lng_span, ref_lng + lng_span
-
     with get_conn() as conn:
-        rows = conn.execute("""
-            SELECT * FROM pois
-            WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ? AND lat IS NOT NULL
-            ORDER BY rating DESC NULLS LAST
-            LIMIT 300
-        """, (lat_min, lat_max, lng_min, lng_max)).fetchall()
+        # 1. 查最近 5 个预计算簇
+        nearby = query_clusters(ref_lat, ref_lng, limit=5)
+        if nearby:
+            cids = [c["cluster_id"] for c in nearby]
+            placeholders = ",".join("?" * len(cids))
+            rows = conn.execute(
+                f"""SELECT * FROM pois
+                    WHERE cluster_id IN ({placeholders}) AND lat IS NOT NULL
+                    ORDER BY rating DESC NULLS LAST
+                    LIMIT 300""",
+                cids,
+            ).fetchall()
+        else:
+            rows = []
+
+        # 2. 兜底：预计算簇不足时用 bbox 查询
+        if len(rows) < 10:
+            radius_km = 5.0
+            import math
+            lat_span = radius_km / 111.32
+            lng_span = radius_km / (111.32 * math.cos(math.radians(ref_lat)))
+            rows = conn.execute("""
+                SELECT * FROM pois
+                WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
+                  AND lat IS NOT NULL
+                ORDER BY rating DESC NULLS LAST
+                LIMIT 300
+            """, (ref_lat - lat_span, ref_lat + lat_span, ref_lng - lng_span, ref_lng + lng_span)).fetchall()
+
         pois = [_row_to_dict(r) for r in rows]
 
-    if len(pois) < 5:
-        _progress("⚠️", f"DB 周边 POI 不足 ({len(pois)})，扩大搜索")
-        with get_conn() as conn:
-            rows = conn.execute("""
-                SELECT * FROM pois WHERE lat IS NOT NULL
-                ORDER BY rating DESC NULLS LAST LIMIT 300
-            """).fetchall()
-            pois = [_row_to_dict(r) for r in rows]
+    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI（{len(nearby)} 个预计算簇）")
 
-    _progress("📊", f"从 DB 加载 {len(pois)} 个 POI，聚类中...")
+    # 3. 按预计算 cluster_id 构造簇（跳过实时聚类）
+    clusters_by_id = {}
+    for p in pois:
+        cid = p.get("cluster_id")
+        if cid is not None:
+            if cid not in clusters_by_id:
+                clusters_by_id[cid] = {"pois": [], "lats": [], "lngs": []}
+            clusters_by_id[cid]["pois"].append(p)
+            clusters_by_id[cid]["lats"].append(p["lat"])
+            clusters_by_id[cid]["lngs"].append(p["lng"])
 
-    # 地理聚类
-    clusters = geo_cluster(pois, eps_meters=500, min_samples=3)
-    _progress("   →", f"{len(clusters)} 个地理簇")
+    clusters = [
+        {
+            "cluster_id": cid,
+            "center_lat": sum(c["lats"]) / len(c["lats"]),
+            "center_lng": sum(c["lngs"]) / len(c["lngs"]),
+            "size": len(c["pois"]),
+            "pois": c["pois"],
+        }
+        for cid, c in clusters_by_id.items()
+        if len(c["pois"]) >= 2
+    ]
+    _progress("   →", f"{len(clusters)} 个预计算簇（无需实时聚类）")
 
-    # 推荐引擎：三路召回 + 精排
+    # 4. 推荐引擎
     up = intent_result.user_profile
     user_prefs = {
         "interests": up.interests or intent_result.keywords or [],
@@ -162,7 +189,6 @@ def _recommend_pois_from_db(origin_coords, dest_coords, intent_result,
         "energy_level": up.energy_level,
         "group_type": up.group_type,
     }
-    # 提取品类关键词
     from app.shared.constants import KW_NORMALIZE
     target_cats = []
     for kw in (intent_result.keywords or []):
