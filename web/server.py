@@ -6,15 +6,17 @@ import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+from app.auth import get_current_user_optional
 from app.core.orchestrator import run_multi_agent
 from app.shared import utils as shared_utils
 from app.shared.utils import AgentSession
@@ -24,6 +26,10 @@ app = FastAPI(title="现在就出发")
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+
+# 注册认证路由
+from web.routes.auth import router as auth_router
+app.include_router(auth_router)
 
 # 会话存储（黑客松简化版，生产环境应换 Redis）
 sessions: dict[str, AgentSession] = {}
@@ -133,8 +139,9 @@ async def health():
 
 
 @app.post("/api/plan/stream")
-async def api_plan_stream(req: PlanRequest):
+async def api_plan_stream(req: PlanRequest, user: Optional[str] = Depends(get_current_user_optional)):
     """新建路线规划 — SSE 流式推送进度."""
+    user_id = user or "default"
     session_id = uuid.uuid4().hex[:8]
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -152,7 +159,7 @@ async def api_plan_stream(req: PlanRequest):
         try:
             future = loop.run_in_executor(
                 _executor,
-                lambda: run_multi_agent(req.query, session=None, user_id="default"),
+                lambda: run_multi_agent(req.query, session=None, user_id=user_id),
             )
             # 边等 orchestrator 边推 SSE 进度事件
             while not future.done():
@@ -193,11 +200,12 @@ async def api_plan_stream(req: PlanRequest):
 
 
 @app.post("/api/plan")
-async def api_plan(req: PlanRequest):
+async def api_plan(req: PlanRequest, user: Optional[str] = Depends(get_current_user_optional)):
     """新建路线规划."""
+    user_id = user or "default"
     session_id = uuid.uuid4().hex[:8]
     try:
-        result, session = run_multi_agent(req.query, session=None, user_id="default")
+        result, session = run_multi_agent(req.query, session=None, user_id=user_id)
         sessions[session_id] = session
         return _build_response(result, session, session_id)
     except Exception as e:
@@ -205,13 +213,14 @@ async def api_plan(req: PlanRequest):
 
 
 @app.post("/api/chat")
-async def api_chat(req: ChatRequest):
+async def api_chat(req: ChatRequest, user: Optional[str] = Depends(get_current_user_optional)):
     """多轮对话修改已有路线."""
+    user_id = user or "default"
     session = sessions.get(req.session_id)
     if session is None:
         return JSONResponse({"error": "会话不存在或已过期，请重新规划"}, status_code=404)
     try:
-        result, session = run_multi_agent(req.query, session=session, user_id="default")
+        result, session = run_multi_agent(req.query, session=session, user_id=user_id)
         sessions[req.session_id] = session
         return _build_response(result, session, req.session_id)
     except Exception as e:

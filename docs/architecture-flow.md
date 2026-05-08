@@ -302,10 +302,9 @@ my-first-app/
 │   ├── core/                     ★ 多 Agent 编排
 │   │   ├── orchestrator.py      主控（完整规划 + 增量修改）
 │   │   ├── intent_agent.py      意图解析
-│   │   ├── poi_strategy_agent.py POI 搜索策略
+│   │   ├── route_agent.py      统一路线 Agent（工具调用循环）
+│   │   ├── intent_agent.py      意图解析
 │   │   ├── narrator_agent.py    个性化解说
-│   │   ├── reviewer_agent.py    质量审核
-│   │   ├── modifier_agent.py    修改意图识别
 │   │   └── types.py             Agent 间通信数据结构
 │   │
 │   ├── providers/               数据源

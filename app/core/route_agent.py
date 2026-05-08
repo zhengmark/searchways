@@ -23,12 +23,30 @@ _SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。你的
 3. **query_clusters** — 用起终点坐标查询沿途的 POI 聚簇。根据用户的偏好关键词和预算来过滤。如果用户没有明确说偏好，用 keywords=["美食", "景点"]
 4. **挑选聚簇** — 从返回的簇中选 3-5 个最合适的。考虑：
    - 空间分布：沿途均匀分布，不要全挤在一起
-   - 品类匹配：簇的 top_cats 是否匹配用户需求
+   - 品类匹配：簇的 top_cats 是否匹配用户需求。如果用户找"美食"，不要选 top_cats 中有"购物""休闲娱乐"的簇。优先选 top_cats 中包含目标品类的簇
+   - **检查 top_poi_names**：必须检查每个簇的 top_poi_names，确保这些 POI 名称和品类确实匹配用户需求。如果 top_poi_names 中的名字看起来不像目标品类（如找"美食"但 top_poi_names 是"XXKTV""XX艺术空间"），不要选这个簇
    - 评分和价格：是否符合用户的预算和品质期望
    - 多样性：避免选 3 个品类完全相同的簇（如全是火锅）
    - num_stops 应等于选中的 cluster_ids 数量（每个簇最多产出一个站）
-5. **build_route** — 用选定的 cluster_ids 构建实际路线。**此步骤不可跳过**，必须拿到真实路线数据后才能开始解说。build_route 的参数 cluster_ids 必须是从 query_clusters 结果中实际出现的 cluster_id
+5. **build_route** — 用选定的 cluster_ids 构建实际路线。**此步骤不可跳过**，必须拿到真实路线数据后才能开始解说。build_route 的参数 cluster_ids 必须是从 query_clusters 结果中实际出现的 cluster_id。**不要对同一组 cluster_ids 重复调用 build_route（只是换排列顺序不算新参数），这样只会浪费时间和 API 配额**
 6. **解说** — 根据 build_route 返回的实际路线数据生成解说文字，包括每站的交通方式、耗时、距离
+
+## 强制工具调用规则（最重要）
+
+**任何出行需求都必须调用工具规划路线。** 即使信息不完整（无起点、无偏好、需求模糊），也必须使用默认值调用工具。**禁止**只输出文字建议而不调工具。
+
+唯一可以只输出文字的情况：
+- 用户不是要规划路线（如纯闲聊、询问系统功能）
+- 用户连城市名都没提供（可以反问一次）
+
+## 极简输入处理规则
+
+如果用户输入极其简短（如"西安 吃"、"北京 玩"），**不要反问用户**。直接使用默认值开始规划：
+- 无起点 → geocode 城市名本身作为起点（即城市中心）
+- 无终点 → 只能设 origin，不设 dest（做起点周边的环线探索）
+- 无关键词 → 用 ["美食", "景点"] 作为默认
+- 无预算 → 用 "medium"
+**唯一例外**：如果用户连城市名都没提供，可以反问一次
 
 ## 解说要求
 
@@ -37,27 +55,44 @@ _SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。你的
 - **分站介绍**：每站写上名称、推荐理由、交通方式和耗时
 - **小贴士**：给 1-2 条实用建议（最佳出发时间、注意事项等）
 - **Mermaid 路线图**：用 ```mermaid 代码块输出 flowchart，格式如下：
-  ```
-  flowchart LR
-      classDef start fill:#10b981,color:#fff
-      classDef mid fill:#3b82f6,color:#fff
-      classDef end fill:#f59e0b,color:#fff
-      N0(["起点名"]):::start
-      N0 -->|"🚶 15分"| N1["🍜 站1名"]:::mid
-      N1 -->|"🚲 8分"| N2["☕ 站2名"]:::mid
-      N2 -->|"🚶 10分"| N3["🏁 终点名"]:::end
-  ```
-  交通 emoji：🚶步行 🚲骑行 🚌公交/地铁 🚕打车
-  站点 emoji 根据品类选择：🍲火锅 🍖烧烤 ☕咖啡 🍰甜品 🍜面馆 🍣日料 🍕西餐 🦐海鲜 🧋茶饮 🍸酒吧 🎡景点 🛍️购物 📖图书馆 🎬影院 🥣清淡
+
+## 解说数据一致性（极其重要）
+
+解说中提到的每个 POI 名称，**必须是 build_route 返回结果中 stops[].name 的精确值**。禁止：
+- 编造 build_route 返回结果中不存在的 POI 名称
+- 用训练数据中的"常识"替换实际路线（如实际路线是 KTV，不能说成"老字号餐厅"）
+- 在解说中提到"推荐去XX"但该地点实际不在 stops 中
+
+如果你发现 build_route 返回的 POI 与用户需求严重不匹配，**如实告诉用户**："抱歉！目前在这些区域找不到完全匹配的 POI。要不要试试放宽关键词或预算？" —— 而不要编造假数据。
+
+Mermaid 图格式：
+```
+flowchart LR
+    classDef start fill:#10b981,color:#fff
+    classDef mid fill:#3b82f6,color:#fff
+    classDef end fill:#f59e0b,color:#fff
+    N0(["起点名"]):::start
+    N0 -->|"🚶 15分"| N1["🍜 站1名"]:::mid
+    N1 -->|"🚲 8分"| N2["☕ 站2名"]:::mid
+    N2 -->|"🚶 10分"| N3["🏁 终点名"]:::end
+```
+交通 emoji：🚶步行 🚲骑行 🚌公交/地铁 🚕打车
+站点 emoji 根据品类选择：🍲火锅 🍖烧烤 ☕咖啡 🍰甜品 🍜面馆 🍣日料 🍕西餐 🦐海鲜 🧋茶饮 🍸酒吧 🎡景点 🛍️购物 📖图书馆 🎬影院 🥣清淡
 
 ## 多轮对话与冲突解决
 
 如果对话历史中有之前的路线信息，用户的新输入可能是在修改：
-- 终点改变（"去大雁塔"）→ 以最新为准，重新 geocode
+- 终点改变（"去大雁塔"）→ 已 geocode 过的坐标可以复用，不需要重复 geocode
 - 约束改变（"1小时"）→ 以最新为准，调整站点数
 - 偏好升级（"要高档"）→ 合并为新偏好
 - 彻底推翻（"不要这个方案"）→ 完全重新规划
 - 自相矛盾（"便宜"+"米其林"）→ 友善指出，反问用户澄清
+
+**约束保留规则（重要）**：如果用户只修改了部分约束（如只改时间、不改偏好），未被明确推翻的约束应该保留。例如：
+- 上一轮 keywords=["风景","骑行"]，本轮用户说"缩短到2小时"→ 仍用 keywords=["风景","骑行"]
+- 上一轮 budget="low"，本轮用户说"加个拍照的地方" → 仍用 budget="low"
+- 用户说了"不要商场" → 后续所有轮次都应排除商场
+- 只有用户明确推翻时才改变（如"不想看风景了，找吃的"）
 
 ## 风格指南
 
@@ -74,6 +109,7 @@ _SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。你的
 - **工具调用总数控制在 5 次以内**：geocode(1-2次) + query_clusters(1-2次) + build_route(1次) = 总调用 ≤ 5 次
 - **使用真实数据解说**：解说中的交通方式、耗时必须来自 build_route 返回值
 - **Mermaid 图也用真实数据**：图中的交通 emoji 和时间必须和 build_route 返回值一致"""
+
 
 
 def run_unified_agent(user_input: str, session: AgentSession = None,
@@ -105,12 +141,18 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
     # 构建消息
     messages = _build_messages(user_input, session, user_data)
 
-    # Agent 状态（工具之间共享）
+    # Agent 状态（工具之间共享）— 多轮对话时从 session 恢复
     agent_state = {
         "origin_coords": session.origin_coords,
         "dest_coords": session.dest_coords,
         "dest_name": session.dest_name or "",
+        "start_name": session.start_name or "",
+        "city": session.city or "",
     }
+
+    # 如果 session 中已有坐标，提示 LLM 可以跳过 geocode
+    if agent_state["origin_coords"] and agent_state["start_name"]:
+        _progress("📍", f"起点已缓存：{agent_state['start_name']}")
 
     _progress("🤖", "统一 Agent 启动（工具调用模式）")
 
@@ -194,12 +236,18 @@ def _build_context(session: AgentSession, user_data: dict) -> str:
     parts = [f"城市：{session.city}"]
     if session.start_name:
         parts.append(f"上次起点：{session.start_name}")
+    if session.origin_coords:
+        parts.append(f"起点坐标已缓存：({session.origin_coords[0]:.4f}, {session.origin_coords[1]:.4f})，如地点未变可跳过 geocode")
     if session.dest_name:
         parts.append(f"上次终点：{session.dest_name}")
+    if session.dest_coords:
+        parts.append(f"终点坐标已缓存：({session.dest_coords[0]:.4f}, {session.dest_coords[1]:.4f})，如地点未变可跳过 geocode")
     if session.stop_names:
         parts.append(f"上次途经：{' → '.join(session.stop_names)}")
     if session.keywords:
         parts.append(f"上次偏好：{session.keywords}")
+    if getattr(session, 'budget', None):
+        parts.append(f"上次预算：{session.budget}")
     if session.num_stops:
         parts.append(f"上次站数：{session.num_stops}")
     if session.distance_info:
@@ -241,6 +289,13 @@ def _finalize_session(session: AgentSession, agent_state: dict,
     """将 agent_state 中的信息同步回 AgentSession."""
     session.last_user_input = user_input
 
+    # 解说/数据一致性后校验：检测 narration 提到的 POI 名是否在 stops 中
+    stop_names = agent_state.get("stop_names", [])
+    if stop_names and narration:
+        missing = [s for s in stop_names if s not in narration]
+        if len(missing) >= len(stop_names) // 2:
+            _progress("⚠️", "解说可能未使用真实路线数据")
+
     # 从 geocode 结果中提取地点名和坐标
     oc = agent_state.get("origin_coords")
     if oc:
@@ -258,6 +313,12 @@ def _finalize_session(session: AgentSession, agent_state: dict,
     city = agent_state.get("city") or _extract_city(user_input, getattr(session, 'default_city', ''))
     if city:
         session.city = city
+
+    # 保存关键词和预算到 session，供下轮多轮对话复用
+    if agent_state.get("last_keywords"):
+        session.keywords = agent_state["last_keywords"]
+    if agent_state.get("last_budget"):
+        session.budget = agent_state["last_budget"]
 
     # 设置 all_pois（优先从 agent_state）
     if agent_state.get("all_pois"):

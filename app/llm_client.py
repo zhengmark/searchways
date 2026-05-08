@@ -1,9 +1,40 @@
 """Shared LLM API client — single source of truth for all agents."""
 import json
+import time
 import requests
 from app.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
 API_URL = f"{LLM_BASE_URL.rstrip('/')}/v1/messages"
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2  # 秒，指数退避起点
+
+
+def _retry_request(headers: dict, payload: dict, timeout: int = 120) -> dict:
+    """带指数退避的 API 请求，处理 429/5xx."""
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.post(API_URL, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code == 429:
+                delay = _RETRY_BASE_DELAY ** (attempt + 1)
+                time.sleep(delay)
+                last_error = resp
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.Timeout:
+            last_error = Exception(f"请求超时({timeout}s)")
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY)
+        except requests.exceptions.RequestException as e:
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY)
+            last_error = e
+    if last_error is not None:
+        if isinstance(last_error, requests.models.Response):
+            last_error = Exception(f"{last_error.status_code} {last_error.reason}")
+        raise last_error
+    raise Exception("LLM API 请求失败：超过最大重试次数")
 
 
 def call_llm(messages: list, system: str = None, max_tokens: int = 4096) -> dict:
@@ -20,9 +51,7 @@ def call_llm(messages: list, system: str = None, max_tokens: int = 4096) -> dict
     }
     if system:
         payload["system"] = system
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    return _retry_request(headers, payload)
 
 
 def call_llm_with_tools(messages: list, tools: list, system: str = None,
@@ -51,9 +80,7 @@ def call_llm_with_tools(messages: list, tools: list, system: str = None,
     }
     if system:
         payload["system"] = system
-    resp = requests.post(API_URL, headers=headers, json=payload, timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    return _retry_request(headers, payload)
 
 
 def tool_result_message(tool_use_id: str, content: str) -> dict:

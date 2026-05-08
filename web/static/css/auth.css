@@ -1,0 +1,100 @@
+/* ── 认证弹窗 ───────────────────────────── */
+.auth-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  z-index: 9999;
+  align-items: center; justify-content: center;
+}
+.auth-overlay.active { display: flex; }
+
+.auth-modal {
+  background: #fff;
+  border-radius: 12px;
+  padding: 32px 28px 24px;
+  width: 360px; max-width: 90vw;
+  box-shadow: 0 12px 40px rgba(0,0,0,.18);
+  position: relative;
+}
+.auth-modal h3 {
+  margin: 0 0 20px;
+  font-size: 1.25rem;
+  text-align: center;
+}
+.auth-modal .close-btn {
+  position: absolute; top: 10px; right: 14px;
+  background: none; border: none; font-size: 1.4rem;
+  cursor: pointer; color: #999; line-height: 1;
+}
+.auth-modal .close-btn:hover { color: #333; }
+
+.auth-modal .field {
+  margin-bottom: 14px;
+}
+.auth-modal .field label {
+  display: block; font-size: .85rem;
+  color: #555; margin-bottom: 4px;
+}
+.auth-modal .field input {
+  width: 100%; padding: 9px 12px;
+  border: 1px solid #d1d5db; border-radius: 8px;
+  font-size: .95rem; box-sizing: border-box;
+  transition: border-color .15s;
+}
+.auth-modal .field input:focus {
+  outline: none; border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+}
+.auth-modal .submit-btn {
+  width: 100%; padding: 10px;
+  background: #2563eb; color: #fff;
+  border: none; border-radius: 8px;
+  font-size: 1rem; cursor: pointer;
+  margin-top: 6px;
+  transition: background .15s;
+}
+.auth-modal .submit-btn:hover { background: #1d4ed8; }
+.auth-modal .submit-btn:disabled { background: #93c5fd; cursor: not-allowed; }
+
+.auth-modal .switch-text {
+  text-align: center; margin-top: 14px;
+  font-size: .85rem; color: #888;
+}
+.auth-modal .switch-text a {
+  color: #2563eb; cursor: pointer; text-decoration: none;
+}
+.auth-modal .switch-text a:hover { text-decoration: underline; }
+
+.auth-modal .error-msg {
+  color: #dc2626; font-size: .8rem;
+  margin-bottom: 8px; display: none;
+}
+.auth-modal .error-msg.show { display: block; }
+
+/* ── 导航栏用户区 ────────────────────────── */
+.nav-user {
+  display: flex; align-items: center; gap: 10px;
+}
+.nav-user .user-name {
+  font-weight: 600; color: #2563eb;
+}
+.nav-user .auth-btn {
+  padding: 5px 14px; border-radius: 6px;
+  border: 1px solid #2563eb; background: transparent;
+  color: #2563eb; font-size: .85rem; cursor: pointer;
+  transition: all .15s;
+}
+.nav-user .auth-btn:hover { background: #2563eb; color: #fff; }
+.nav-user .auth-btn.logout-btn {
+  border-color: #999; color: #999;
+}
+.nav-user .auth-btn.logout-btn:hover { background: #999; color: #fff; }
+
+/* ── 未登录时输入区锁定 ────────────────────── */
+.input-section.locked .input-row { opacity: .45; pointer-events: none; }
+.input-section.locked .quick-tags { opacity: .45; pointer-events: none; }
+.login-hint {
+  display: none; text-align: center;
+  color: #999; font-size: .85rem; margin-top: 8px;
+}
+.input-section.locked .login-hint { display: block; }

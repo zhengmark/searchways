@@ -19,16 +19,16 @@
 | LLM 意图解析 | `app/core/intent_agent.py` | ✅ 完成 | 深度意图解析 + UserProfile 推理 + 搜索提示 |
 | 地理编码 | `app/providers/amap_provider.py:robust_geocode` | ✅ 完成 | 4 层递进兜底 + 正则回退 + 子串校验 |
 | POI 搜索 | `app/providers/amap_provider.py` | ✅ 完成 | 高德 text/around 双 API + 走廊 4 点采样 |
-| POI 搜索策略 | `app/core/poi_strategy_agent.py` | ✅ 完成 | LLM 制定搜索区域 + 关键词 + 质量评估 + 自动补搜 |
+| 统一路线 Agent | `app/core/route_agent.py` | ✅ 完成 | 罗斯方案 — LLM 工具调用循环（geocode → query_clusters → build_route → 解说），替代旧多 Agent 串行 |
+| POI 搜索策略 | `app/pipeline/cluster_tools.py` | ✅ 完成 | 聚类召回 + 推荐引擎排序 |
 | 图构建 | `app/algorithms/graph_planner.py:build_graph` | ✅ 完成 | 全连接邻接矩阵，ThreadPool 并发，步行 API + haversine 兜底 |
 | 路径规划 | `app/algorithms/graph_planner.py:shortest_path` | ✅ 完成 | 连线投影分段选取（有终点）/ 距离带分层（无终点）+ 时间预算约束 |
-| 路线解说 | `app/core/narrator_agent.py` | ✅ 完成 | 个性化解说，基于 UserProfile 调整语气和推荐角度 |
-| 路线审核 | `app/core/reviewer_agent.py` | ✅ 完成 | 质量审核（覆盖/多样/匹配/时间），最多 2 轮 refine |
+| 路线解说 | `app/core/route_agent.py`（内嵌） | ✅ 完成 | 统一 Agent 内 LLM 生成个性化解说 |
 | Mermaid 图 | `app/shared/utils.py:_build_mermaid_from_path` | ✅ 完成 | 含交通工具 emoji + 颜色编码 |
 | Leaflet 地图 | `app/shared/utils.py:_build_route_html` | ✅ 完成 | 起终点 + 中间站标记 + 路线连线 |
 | 点评 API | `app/algorithms/reviews.py` | 🔶 骨架 | 定义了 `fetch_reviews` tool，实际未接入 |
 | 多用户测试 | `tests/test_ux_deep.py` / `tests/test_user_scenarios.py` | ✅ 完成 | 5 画像自动化评分卡，3 画像快速回归 |
-| 多轮对话 | `app/core/orchestrator.py` + `modifier_agent.py` | ✅ 完成 | 规则+LLM 修改意图识别（含 add_poi），增量重规划，session 持久化 |
+| 多轮对话 | `app/core/orchestrator.py` + `route_agent.py` | ✅ 完成 | 统一 Agent 内对话历史注入，增量重规划，session 持久化 |
 | 用户画像 | `app/user_profile.py` | ✅ 完成 | per-user JSON 持久化，256KB 压缩，favorites/history/session |
 | Web 前端 | `web/server.py` + `web/templates/index.html` | ✅ 完成 | FastAPI + SSE 流式 + Leaflet + Mermaid |
 | 本地 POI DB | `db/` + `app/recommender/` + `app/clustering/` | ✅ 完成 | 预计算聚类 + 推荐引擎（USE_POI_DB=true 启用） |
@@ -60,12 +60,10 @@
 │   ├── user_profile.py           # ★ 用户画像管理器
 │   ├── core/
 │   │   ├── types.py              # Agent 间通信数据结构
-│   │   ├── orchestrator.py       # ★ 多智能体主控
-│   │   ├── intent_agent.py       # 意图理解 Agent
-│   │   ├── poi_strategy_agent.py # POI 搜索策略 + 质量评估
-│   │   ├── reviewer_agent.py     # 路线质量审核
-│   │   ├── narrator_agent.py     # 个性化路线解说
-│   │   └── modifier_agent.py     # ★ 修改意图识别（9 类规则 + LLM 兜底）
+│   │   ├── orchestrator.py       # ★ 主控入口，调用统一 Agent
+│   │   ├── route_agent.py        # ★ 统一路线 Agent（罗斯方案 — 工具调用循环）
+│   │   ├── intent_agent.py       # 意图理解 Agent（独立调用）
+│   │   └── narrator_agent.py     # 个性化解说 Agent（独立调用）
 │   ├── providers/
 │   │   └── amap_provider.py      # ★ 高德 API 封装
 │   ├── algorithms/
@@ -87,16 +85,11 @@
 └── docs/                         # ARCHITECTURE.md, CONTEXT.md
 ```
 
-### 核心数据流（`run_multi_agent` Plan-Execute-Review-Refine）
+### 核心数据流（`run_multi_agent` → 统一 Agent 工具调用循环）
 
 ```
 用户输入 "从西安丈八六路地铁站出发到浐灞玩，3小时"
   │
-  ├─ 判断：新路线 or 修改已有路线
-  │     ├─ 新会话 / new_route → 完整 PLAN 流程
-  │     └─ 有历史 session → modifier_agent.detect_modification() → 增量修改
-  │
-  ├─ 【完整规划 PLAN】
   ├─ 1. _extract_city()     → 城市名（正则匹配 300+ 城市列表 + "XX市" 兜底）
   ├─ 2. Intent Agent        → LLM 深度解析 {origin, destination, keywords, num_stops, time_budget_hours}
   │      └─ 同时推理 UserProfile（group_type, energy_level, budget, interests, notes）
@@ -105,38 +98,20 @@
   │      └─ Layer 1: geocode(原始名称)  → Layer 2: input_tips 子串匹配
   │      └─ Layer 3: geocode(名称+地铁站) → Layer 4: geocode(城市+名称)
   │      └─ Regex fallback: 从原始输入提取 [地名模式] 重新 geocode
-  ├─ 4. POI Strategy Agent   → LLM 制定搜索策略（区域 + 关键词 + 半径 + 原因）
-  │      └─ 执行搜索 → Amap text/around/along_route API
-  │      └─ POI 质量评估 → 不足时自动补搜（关键词规范化 + 品类黑名单过滤）
-  ├─ 5. Route Engine         → build_graph() + shortest_path()
-  │      └─ 全连接邻接矩阵 → 连线投影分段选取 → 500m 最小间距过滤
-  │      └─ 时间预算约束：超出 20% 自动减站
-  ├─ 6. Narrator Agent       → LLM 个性化解说（基于 UserProfile 调整语气）
-  ├─ 7. Reviewer Agent       → 质量审核（覆盖/多样/匹配/时间），最多 2 轮 refine
-  │      └─ 不通过 → 调整搜索策略 → 重新搜索 → 重新规划
-  └─ 8. Output
+  │
+  ├─ 4. 统一路线 Agent (`route_agent.run_unified_agent`) — 工具调用循环（≤12 轮）
+  │      └─ geocode → query_clusters（聚类召回）→ build_route（建图+路径规划）
+  │      └─ LLM 挑选聚簇 + 个性化解说 + Mermaid 图生成
+  │      └─ 工具定义在 `app/pipeline/cluster_tools.py`
+  │
+  └─ 5. Output
        ├─ 文本回复 + Mermaid → route_output.md
        ├─ Leaflet 地图 → route_output.html
        └─ 保存用户画像 → data/users/{user_id}.json（profile + favorites + history + session）
 
-【多轮修改 MODIFY】
-  用户 "不去钟楼了，去大雁塔"
-  ├─ modifier_agent.detect_modification()
-  │     ├─ 9 类正则规则优先（快速、确定性）
-  │     └─ LLM 兜底（模糊/复合表达）
-  ├─ 识别为 change_destination → 只重跑受影响环节
-  │     └─ geocode → POI 搜索 → 建图 → 解说 → 审核
-  ├─ 其他修改类型：
-  │     ├─ change_origin        → geocode + 重新搜索 + 建图
-  │     ├─ change_destination   → geocode + 重新搜索 + 建图
-  │     ├─ add_poi              → geocode 指定地点 → 插入候选池 → num_stops+1 → 建图
-  │     ├─ change_keywords      → 重新搜索 + 建图
-  │     ├─ change_num_stops     → 只重建图
-  │     ├─ change_preferences   → 更新画像 + 重新解说
-  │     ├─ change_poi_location  → 新区域搜索 + 建图
-  │     ├─ adjust_constraint    → 重新建图（时间约束）
-  │     └─ new_route            → 完整重规划
-  └─ 每轮结束：保存 session + history + favorites 到 data/data/users/{user_id}.json
+【多轮修改】
+  ├─ 统一 Agent 内对话历史注入 → 工具调用循环自动重规划
+  └─ 每轮结束：保存 session + history + favorites
 ```
 
 ---
@@ -177,14 +152,13 @@
 
 **为什么**：字符重叠校验下，"四路地铁站" 的 5 个字符分散出现在 "仟那千寻酒店(西安霸城门地铁站凤城四路店)" 中 → 匹配到凤城四路而非丈八四路。子串校验可杜绝跨地名误配。
 
-### 4.6 多轮修改：规则优先 + LLM 兜底
+### 4.6 多轮修改：对话历史注入统一 Agent
 
-**选择**：修改意图识别优先用正则规则匹配，未命中时才调用 LLM。
+**选择**：多轮对话时，将上一次路线上下文注入统一 Agent 的 system prompt，LLM 自行判断修改类型并重规划。
 
 **为什么不**：
-- 纯 LLM：每次修改意图识别都调 LLM 会增加 1-2 秒延迟 + API 费用
-- 纯规则：难以覆盖 "换一种风格吧""感觉不太对" 等模糊表达
-- 混合策略下，规则覆盖 ~90% 常见修改（改起点/终点/关键词/站点数等），LLM 处理剩余 ~10%
+- 旧方案（modifier_agent 独立检测 + 增量执行）：代码路径过多，维护困难
+- 统一 Agent 方案：LLM 在工具调用循环中自然理解修改意图，减少硬编码规则
 
 ### 4.7 用户画像：单文件 JSON + 大小压缩
 
@@ -254,7 +228,7 @@
 | 极简输入体验差 | 低 | "北京 吃" 只能全城中心兜底，3 个 POI 挤在 1.4km 内 |
 | 建图性能 | 低 | 49 POI 全连接建图耗时约 90 秒（O(n²) 步行 API 调用），大搜索量场景卡 |
 | 地名截断残余风险 | 低 | 如果 LLM 截断且 input_tips 不返回含正确名称的候选项，无法恢复 |
-| 多轮对话 LLM 兜底质量 | 低 | modifier_agent 的 LLM 兜底目前使用 fast model，复杂表达可能误判；规则覆盖 ~90% 场景 |
+| 多轮对话 LLM 兜底质量 | 低 | 统一 Agent 内通过上下文注入实现多轮对话，复杂修改可能误判；覆盖 ~90% 场景 |
 
 ---
 
@@ -272,7 +246,7 @@
 | — | 单元测试 | 目前只有集成测试，`graph_planner` 和 `poi` 缺单测 |
 
 已完成（本轮）:
-- ✅ 多轮对话（modifier_agent + orchestrator 双分支）
+- ✅ 多轮对话（上下文注入统一 Agent + session 持久化）
 - ✅ 用户画像持久化（UserProfileManager + 256KB 压缩 + session 恢复）
 - ✅ 时间预算约束落地（超出 20% 自动减站 + Reviewer 审核）
 - ✅ POI 质量评估闭环（evaluate_pois → 自动补搜 → 重评估）

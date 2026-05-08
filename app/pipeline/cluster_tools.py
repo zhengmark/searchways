@@ -8,12 +8,112 @@
 
 import json
 import math
+import time
+from functools import lru_cache
 
 from app.providers.amap_provider import robust_geocode, AmapAPIError
 from app.algorithms.graph_planner import build_graph, pre_prune_pois, shortest_path
 from db.cluster import query_corridor_clusters
 from db.connection import get_conn
 from db.repository import _row_to_dict
+
+# 工具调用去重缓存（避免 LLM 对相同参数重复调用 build_route）
+_DEDUP_CACHE = {}  # key: (tool_name, frozenset_params) → (timestamp, result_json)
+_DEDUP_TTL = 30  # 秒
+
+# 关键词 → 品类映射（用于 query_clusters 相关性评分）
+_KEYWORD_CATEGORY_MAP = {
+    # 美食类
+    "美食": ["餐饮", "火锅", "烧烤", "小吃", "甜品", "咖啡", "茶馆", "西餐", "日料", "海鲜", "面馆"],
+    "火锅": ["火锅", "餐饮"],
+    "烧烤": ["烧烤", "餐饮"],
+    "咖啡": ["咖啡", "茶馆"],
+    "甜品": ["甜品", "咖啡"],
+    "小吃": ["小吃", "餐饮"],
+    "清淡": ["茶馆", "咖啡", "甜品", "小吃"],
+    "养生": ["茶馆", "咖啡", "小吃"],
+    "宵夜": ["火锅", "烧烤", "小吃", "餐饮"],
+    # 景点类
+    "景点": ["景点", "公园", "博物馆", "古迹", "文化", "剧院"],
+    "公园": ["公园", "景点"],
+    "博物馆": ["博物馆", "文化"],
+    "文化": ["博物馆", "文化", "古迹", "景点"],
+    "拍照": ["景点", "公园", "博物馆"],
+    # 购物类
+    "购物": ["购物", "商场"],
+    "商场": ["购物", "商场"],
+    # 休闲类
+    "亲子": ["公园", "购物", "景点", "游乐"],
+    "户外": ["公园", "景点"],
+    "骑行": ["公园", "景点"],
+    # 细分补充
+    "面食": ["面馆", "小吃", "餐饮"],
+    "面馆": ["面馆", "小吃", "餐饮"],
+    "书店": ["文化", "咖啡", "图书馆", "购物"],
+    "安静": ["咖啡", "茶馆", "图书馆", "文化"],
+    "拍照": ["景点", "公园", "博物馆", "文化"],
+    "文艺": ["咖啡", "茶馆", "文化", "博物馆"],
+    "网红": ["咖啡", "甜品", "景点", "购物"],
+    "图书馆": ["图书馆", "文化", "咖啡"],
+    "酒吧": ["酒吧", "餐饮"],
+    "夜宵": ["火锅", "烧烤", "小吃", "餐饮", "酒吧"],
+    "深夜": ["火锅", "烧烤", "小吃", "酒吧"],
+    "约会": ["咖啡", "甜品", "西餐", "日料", "景点"],
+    "商务": ["西餐", "火锅", "日料", "海鲜"],
+    "高档": ["西餐", "日料", "海鲜", "火锅"],
+    "穷游": ["公园", "景点", "博物馆", "小吃"],
+    "带孩子": ["公园", "景点", "博物馆", "购物", "游乐"],
+    "带老人": ["公园", "景点", "博物馆", "茶馆"],
+    "亲子": ["公园", "景点", "博物馆", "购物", "游乐"],
+    "室内": ["博物馆", "购物", "咖啡", "图书馆", "剧院"],
+    "雨天": ["博物馆", "购物", "咖啡", "图书馆", "剧院"],
+}
+
+# POI 名称黑名单关键词 — 包含这些词的簇相关性降权
+_POI_NAME_BLACKLIST = [
+    "KTV", "ktv", "Ktv", "纯K", "K ",
+    "棋牌", "麻将",
+    "商务会所", "洗浴", "足浴",
+    "手机", "专卖店", "小米之家",
+    "舞厅", "歌厅",
+    "中介", "房产",
+    "Party.K", "party.k",
+]
+
+
+def _cluster_has_blacklist_name(cluster: dict) -> bool:
+    """检查簇的 top_poi_names 是否含黑名单词."""
+    names = cluster.get("top_poi_names", [])
+    for name in names:
+        for bl in _POI_NAME_BLACKLIST:
+            if bl.lower() in name.lower():
+                return True
+    return False
+
+
+def _cluster_relevance(cluster: dict, keywords: list) -> float:
+    """计算聚簇与关键词的相关性 0.0-1.0."""
+    if not keywords:
+        return 0.5  # 无偏好时中等相关
+    top_cats = [c.lower() for c in cluster.get("top_cats", [])]
+    score = 0.0
+    for kw in keywords:
+        kw_lower = kw.lower()
+        match_cats = _KEYWORD_CATEGORY_MAP.get(kw_lower, [kw_lower])
+        for mc in match_cats:
+            if any(mc.lower() in tc for tc in top_cats):
+                score += 1.0 / len(keywords)
+                break
+        else:
+            # 模糊匹配：关键词是否出现在 top_cats 名字中
+            if any(kw_lower in tc for tc in top_cats):
+                score += 0.5 / len(keywords)
+
+    # 黑名单降权：含 KTV/棋牌/手机店等词 → 得分减半
+    if _cluster_has_blacklist_name(cluster):
+        score *= 0.5
+
+    return min(score, 1.0)
 
 
 # ── 工具定义（Anthropic 格式）───────────────────────────
@@ -128,6 +228,12 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
         dest_lat=dest_lat, dest_lng=dest_lng,
         keywords=keywords, budget=budget,
     )
+    # 计算相关性并排序
+    kws = keywords or []
+    for c in clusters:
+        c["_relevance"] = _cluster_relevance(c, kws)
+    clusters.sort(key=lambda c: (c["_relevance"], c.get("avg_rating", 0) or 0), reverse=True)
+
     # 精简返回给 LLM 的字段
     summary = []
     for c in clusters:
@@ -140,7 +246,12 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
             "avg_rating": c["avg_rating"],
             "avg_price": c["avg_price"],
             "top_poi_names": c["top_poi_names"][:3],
+            "keyword_match": round(c["_relevance"], 1),  # 0=不匹配, 0.5=中性, 1=高度匹配
         })
+    # 筛掉完全无关的簇（match=0），保留至少 5 个
+    relevant = [s for s in summary if s["keyword_match"] > 0]
+    if len(relevant) >= 3:
+        summary = relevant
     return {"success": True, "clusters": summary, "total": len(summary)}
 
 
@@ -237,6 +348,35 @@ def execute_tool(tool_name: str, tool_input: dict, agent_state: dict) -> str:
     Returns:
         JSON 字符串，可直接用于 tool_result 消息
     """
+    # 去重缓存检查（避免 LLM 对相同参数重复调用）
+    if tool_name == "build_route":
+        cache_key = (
+            "build_route",
+            json.dumps(sorted(tool_input.get("cluster_ids", [])), sort_keys=True),
+            tool_input.get("num_stops"),
+        )
+    elif tool_name == "query_clusters":
+        cache_key = (
+            "query_clusters",
+            tool_input.get("origin_lat"),
+            tool_input.get("origin_lng"),
+            tool_input.get("dest_lat"),
+            tool_input.get("dest_lng"),
+            json.dumps(sorted(tool_input.get("keywords", [])), sort_keys=True),
+            tool_input.get("budget"),
+        )
+    else:
+        cache_key = None
+
+    if cache_key is not None:
+        cached = _DEDUP_CACHE.get(cache_key)
+        if cached:
+            ts, result = cached
+            if time.time() - ts < _DEDUP_TTL:
+                return result
+            else:
+                del _DEDUP_CACHE[cache_key]
+
     if tool_name == "geocode":
         result = tool_geocode(
             place=tool_input.get("place", ""),
@@ -257,13 +397,20 @@ def execute_tool(tool_name: str, tool_input: dict, agent_state: dict) -> str:
     elif tool_name == "query_clusters":
         default_origin = agent_state.get("origin_coords", (0, 0))
         default_dest = agent_state.get("dest_coords")
+        # 保存本次查询的关键词和预算到 agent_state，供多轮复用
+        kws = tool_input.get("keywords")
+        if kws:
+            agent_state["last_keywords"] = kws
+        budget = tool_input.get("budget")
+        if budget:
+            agent_state["last_budget"] = budget
         result = tool_query_clusters(
             origin_lat=tool_input.get("origin_lat", default_origin[0]),
             origin_lng=tool_input.get("origin_lng", default_origin[1]),
             dest_lat=tool_input.get("dest_lat", default_dest[0] if default_dest else None),
             dest_lng=tool_input.get("dest_lng", default_dest[1] if default_dest else None),
-            keywords=tool_input.get("keywords"),
-            budget=tool_input.get("budget"),
+            keywords=kws,
+            budget=budget,
         )
     elif tool_name == "build_route":
         origin_coords = agent_state.get("origin_coords")
@@ -293,7 +440,12 @@ def execute_tool(tool_name: str, tool_input: dict, agent_state: dict) -> str:
                 }
                 for s in result["stops"]
             ]
-    else:
-        result = {"success": False, "error": f"未知工具: {tool_name}"}
 
-    return json.dumps(result, ensure_ascii=False, default=str)
+    result_json = json.dumps(result, ensure_ascii=False, default=str)
+
+    # 成功的 build_route 或 query_clusters 结果写入去重缓存
+    if (tool_name == "build_route" and result.get("success")) or \
+       (tool_name == "query_clusters" and result.get("success")):
+        _DEDUP_CACHE[cache_key] = (time.time(), result_json)
+
+    return result_json
