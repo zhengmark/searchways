@@ -7,6 +7,27 @@
   <link rel="stylesheet" href="/static/assets/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="stylesheet" href="/static/css/auth.css">
+  <style>
+    /* ── 进度条 ──────────────────────── */
+    .progress-bar-wrap { width:100%; height:6px; background:#e5e7eb; border-radius:3px; margin:8px 0; position:relative; }
+    .progress-bar-fill { height:100%; background:linear-gradient(90deg,#2563eb,#10b981); border-radius:3px; transition:width .3s; width:0; }
+    .progress-bar-text { font-size:.7rem; color:#888; text-align:right; margin-top:2px; }
+    /* ── 违规警告 ─────────────────────── */
+    .violation-card { display:none; background:#fef3c7; border:1px solid #f59e0b; border-radius:8px; padding:10px 14px; margin:8px 0; }
+    .violation-title { font-weight:600; color:#92400e; font-size:.85rem; margin-bottom:4px; }
+    .violation-card div { font-size:.8rem; color:#b45309; line-height:1.5; }
+    /* ── 分享栏 ───────────────────────── */
+    .share-bar { display:none; margin:8px 0; }
+    .share-btn { padding:6px 14px; border:1px solid #2563eb; background:#fff; color:#2563eb; border-radius:6px; cursor:pointer; font-size:.85rem; }
+    .share-btn:hover { background:#2563eb; color:#fff; }
+    .share-msg { margin-left:10px; font-size:.8rem; color:#10b981; }
+    /* ── 画像面板 ─────────────────────── */
+    .profile-panel { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:14px; margin:10px 0; }
+    .profile-panel summary { cursor:pointer; font-weight:600; color:#334155; }
+    .profile-section { margin:10px 0; }
+    .profile-section h4 { font-size:.85rem; color:#64748b; margin:0 0 4px; }
+    .profile-tag { display:inline-block; padding:2px 8px; background:#e0e7ff; color:#3730a3; border-radius:10px; font-size:.75rem; margin:2px; }
+  </style>
 </head>
 <body>
 
@@ -26,20 +47,23 @@
       <div class="input-row">
         <input type="text" id="userInput"
                placeholder="例如：从丈八六路地铁站出发到浐灞玩一天..."
-               onkeydown="if(event.key==='Enter') planRoute()"
                autofocus>
-        <button id="planBtn" onclick="planRoute()">规划路线</button>
+        <button id="planBtn">规划路线</button>
       </div>
       <div class="quick-tags">
-        <button class="tag" onclick="setTag('从西安北站出发去曲江玩一天')">曲江一日游</button>
-        <button class="tag" onclick="setTag('西安钟楼附近找好吃的')">美食探索</button>
-        <button class="tag" onclick="setTag('西安亲子出游半日')">亲子出游</button>
-        <button class="tag" onclick="setTag('西安骑行放松路线')">骑行放松</button>
-        <button class="tag" onclick="setTag('西安文化探索深度游')">文化探索</button>
+        <button class="tag" data-query="从西安北站出发去曲江玩一天">曲江一日游</button>
+        <button class="tag" data-query="西安钟楼附近找好吃的">美食探索</button>
+        <button class="tag" data-query="西安亲子出游半日">亲子出游</button>
+        <button class="tag" data-query="西安骑行放松路线">骑行放松</button>
+        <button class="tag" data-query="西安文化探索深度游">文化探索</button>
       </div>
       <p class="login-hint">请先登录或注册后再规划路线</p>
+      <div class="progress-bar-wrap" id="progressWrap" style="display:none">
+        <div class="progress-bar-fill" id="progressFill"></div>
+        <div class="progress-bar-text" id="progressText">0%</div>
+      </div>
       <div id="status" class="status"></div>
-      <div id="progressToggle" class="progress-toggle" onclick="toggleProgress()"></div>
+      <div id="progressToggle" class="progress-toggle"></div>
     </section>
 
     <!-- ── 空态 ──────────────────────────── -->
@@ -71,7 +95,19 @@
       <div class="stat-item"><div class="stat-value" id="statScore">--</div><div class="stat-label">审核评分</div></div>
     </div>
 
-    <!-- ── 结果区 ──────────────────────────── -->
+    <!-- ── 违规警告 ──────────────────────────── -->
+    <div id="violationCard" class="violation-card">
+      <div class="violation-title">⚠️ 路线提醒</div>
+      <div id="violationList"></div>
+    </div>
+
+    <!-- ── 分享按钮 ──────────────────────────── -->
+    <div id="shareBar" class="share-bar">
+      <button class="share-btn" onclick="shareRoute()">📋 复制分享链接</button>
+      <span id="shareMsg" class="share-msg"></span>
+    </div>
+
+    <!-- ── 结果区（无走廊时的旧模式） ──────── -->
     <section id="resultArea" class="result-area">
       <div class="result-grid">
         <div id="map" class="map-panel"></div>
@@ -88,11 +124,50 @@
       <div class="chat-section">
         <div class="chat-row">
           <input type="text" id="chatInput"
-                 placeholder="对路线不满意？告诉我你想怎么改..."
-                 onkeydown="if(event.key==='Enter') modifyRoute()">
-          <button id="chatBtn" onclick="modifyRoute()">修改路线</button>
+                 placeholder="对路线不满意？告诉我你想怎么改...">
+          <button id="chatBtn">修改路线</button>
         </div>
         <div id="chatStatus" class="chat-status"></div>
+      </div>
+    </section>
+
+    <!-- ── 编辑区（有走廊数据时） ────────────── -->
+    <section id="editorArea" class="editor-layout">
+      <div id="editorMap" class="map-main"></div>
+      <aside id="sidebar" class="sidebar">
+        <div id="editorError" class="editor-error" style="display:none"></div>
+        <div class="sidebar-section">
+          <h3>路线摘要</h3>
+          <div id="routeSummary" class="route-summary"></div>
+        </div>
+        <div class="sidebar-section">
+          <h3>途经站点</h3>
+          <ul id="stopList" class="stop-list"></ul>
+        </div>
+        <div class="sidebar-section" id="editorToolbar">
+          <button id="confirmBtn" class="confirm-btn">确认路线</button>
+        </div>
+        <div class="sidebar-section chat-inline">
+          <div class="chat-row">
+            <input type="text" id="editorChatInput"
+                   placeholder="修改路线...">
+            <button id="editorChatBtn">发送</button>
+          </div>
+          <div id="editorChatStatus" class="chat-status"></div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- ── 确认区（路线已确认后） ────────────── -->
+    <section id="confirmedArea" class="confirmed-layout">
+      <div id="confirmedMap" class="map-final"></div>
+      <div class="confirmed-panels">
+        <div id="confirmedNarration" class="narration-text full-width"></div>
+        <div class="mermaid-diagram" id="confirmedMermaidContainer">
+          <div id="confirmedMermaid"></div>
+          <pre id="confirmedMermaidFallback" class="mermaid-fallback"></pre>
+        </div>
+        <div class="final-stats" id="finalStats"></div>
       </div>
     </section>
 
@@ -135,343 +210,6 @@
   <script src="/static/assets/leaflet/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="/static/js/auth.js"></script>
-  <script>
-    mermaid.initialize({ startOnLoad: false, theme: 'default' });
-
-    let map = null;
-    let sessionId = null;
-    let lastResultData = null;
-
-    // ── Helpers ────────────────────────────
-    const $ = id => document.getElementById(id);
-    const HISTORY_KEY = 'route_history_v1';
-
-    function _histKey() {
-      return currentUsername ? HISTORY_KEY + '_' + currentUsername : HISTORY_KEY;
-    }
-
-    function loadHistory() {
-      try { return JSON.parse(localStorage.getItem(_histKey()) || '[]'); }
-      catch { return []; }
-    }
-    function saveHistory(items) {
-      localStorage.setItem(_histKey(), JSON.stringify(items.slice(0, 20)));
-    }
-    function renderHistoryList() {
-      const list = $('historyList');
-      const items = loadHistory();
-      if (!items.length) { list.textContent = '暂无记录'; return; }
-      list.innerHTML = '';
-      items.forEach((h, i) => {
-        const div = document.createElement('div');
-        div.className = 'history-item';
-        div.innerHTML = `<span>${h.input.slice(0, 40)}${h.input.length > 40 ? '...' : ''}</span>`;
-        const right = document.createElement('span');
-        right.style.display = 'flex'; right.style.alignItems = 'center'; right.style.gap = '8px';
-        const time = document.createElement('span');
-        time.className = 'hist-time'; time.textContent = h.time;
-        right.appendChild(time);
-        const del = document.createElement('button');
-        del.className = 'hist-delete'; del.textContent = '×'; del.title = '删除';
-        del.onclick = e => { e.stopPropagation(); deleteHistory(i); };
-        right.appendChild(del);
-        div.appendChild(right);
-        div.onclick = () => {
-          if (h.data) showResult(h.data);
-          else {
-            $('narration').textContent = h.narration || '';
-            if (h.mermaid) renderMermaid(h.mermaid);
-            else { $('mermaidCode').innerHTML = ''; $('mermaidFallback').classList.remove('active'); }
-          }
-        };
-        list.appendChild(div);
-      });
-    }
-    function deleteHistory(idx) {
-      const items = loadHistory();
-      items.splice(idx, 1);
-      saveHistory(items);
-      renderHistoryList();
-    }
-    function addHistory(input, data) {
-      const items = loadHistory();
-      items.unshift({
-        time: new Date().toLocaleString(),
-        input,
-        data: data,
-        narration: data.narration || '',
-        mermaid: data.mermaid || '',
-        stops: data.stops || []
-      });
-      saveHistory(items);
-      renderHistoryList();
-    }
-
-    // ── Markdown → HTML ────────────────────
-    function renderMarkdown(text) {
-      if (!text) return '';
-      let html = text;
-      // headers
-      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-      html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-      // bold / italic
-      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-      // horizontal rules
-      html = html.replace(/^---$/gm, '<hr>');
-      // 引用块（▶ 开头）
-      html = html.replace(/^▶ (.+)$/gm, '<em>$1</em>');
-      // paragraphs: double newline
-      html = html.replace(/\n\n+/g, '</p><p>');
-      html = '<p>' + html + '</p>';
-      // clean empty paragraphs
-      html = html.replace(/<p>\s*<\/p>/g, '');
-      return html;
-    }
-
-    // ── Input ──────────────────────────────
-    function setTag(text) {
-      $('userInput').value = text;
-      $('userInput').focus();
-    }
-
-    // ── Progress ───────────────────────────
-    let progressCount = 0;
-    function addProgress(emoji, msg) {
-      progressCount++;
-      const status = $('status');
-      const el = document.createElement('span');
-      el.className = 'progress-step';
-      el.textContent = emoji + ' ' + msg;
-      status.appendChild(el);
-      status.scrollTop = status.scrollHeight;
-      // 显示折叠按钮
-      const toggle = $('progressToggle');
-      toggle.textContent = progressCount + ' 步 · 点击收起 ▴';
-      toggle.classList.add('show');
-    }
-    function toggleProgress() {
-      const status = $('status');
-      const toggle = $('progressToggle');
-      if (status.classList.contains('collapsed')) {
-        status.classList.remove('collapsed');
-        toggle.textContent = progressCount + ' 步 · 点击收起 ▴';
-      } else {
-        status.classList.add('collapsed');
-        toggle.textContent = progressCount + ' 步 · 点击展开 ▾';
-      }
-    }
-
-    // ── Skeleton ───────────────────────────
-    function showSkeleton() {
-      $('emptyState').style.display = 'none';
-      $('skeletonArea').classList.add('active');
-      $('resultArea').classList.remove('active');
-      $('errorCard').classList.remove('active');
-      $('statsBar').classList.remove('active');
-    }
-    function hideSkeleton() {
-      $('skeletonArea').classList.remove('active');
-    }
-
-    // ── Plan ───────────────────────────────
-    async function planRoute() {
-      const input = $('userInput').value.trim();
-      if (!input) return;
-
-      const btn = $('planBtn');
-      btn.disabled = true;
-      $('status').innerHTML = '';
-      $('status').classList.remove('collapsed');
-      $('progressToggle').classList.remove('show');
-      progressCount = 0;
-      showSkeleton();
-
-      try {
-        const resp = await authFetch('/api/plan/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: input }),
-        });
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const evt = JSON.parse(line.slice(6));
-              if (evt.type === 'progress') {
-                addProgress(evt.emoji, evt.msg);
-              } else if (evt.type === 'result') {
-                sessionId = evt.session_id;
-                lastResultData = evt;
-                btn.disabled = false;
-                hideSkeleton();
-                showResult(evt);
-                addHistory(input, evt);
-              } else if (evt.type === 'error') {
-                btn.disabled = false;
-                hideSkeleton();
-                showError(evt.error);
-              }
-            } catch (e) {}
-          }
-        }
-      } catch (err) {
-        btn.disabled = false;
-        hideSkeleton();
-        showError(err.message);
-      }
-    }
-
-    function showError(msg) {
-      $('errorCard').classList.add('active');
-      $('errorMsg').textContent = msg;
-      $('resultArea').classList.remove('active');
-      $('statsBar').classList.remove('active');
-      $('emptyState').style.display = 'none';
-    }
-
-    function showResult(data) {
-      $('errorCard').classList.remove('active');
-      $('emptyState').style.display = 'none';
-      $('resultArea').classList.add('active');
-      $('statsBar').classList.add('active');
-
-      // 统计
-      $('statDuration').textContent = data.total_duration_min || 0;
-      $('statDistance').textContent = ((data.total_distance_m || 0) / 1000).toFixed(1);
-      const stops = data.stops || [];
-      $('statStops').textContent = Math.max(0, stops.length - 2);
-      $('statScore').textContent = data.review_score ? data.review_score.toFixed(1) : '--';
-
-      // 解说（Markdown 渲染）
-      $('narration').innerHTML = renderMarkdown(data.narration || '暂无解说');
-
-      // Mermaid
-      renderMermaid(data.mermaid);
-
-      // 地图
-      renderMap(stops);
-    }
-
-    // ── Mermaid ────────────────────────────
-    async function renderMermaid(code) {
-      const el = $('mermaidCode');
-      const fallback = $('mermaidFallback');
-      if (!code) {
-        el.innerHTML = '';
-        fallback.classList.remove('active');
-        return;
-      }
-      el.innerHTML = '';
-      fallback.classList.remove('active');
-      try {
-        const { svg } = await mermaid.render('mermaidSvg', code);
-        el.innerHTML = svg;
-      } catch (e) {
-        fallback.textContent = code;
-        fallback.classList.add('active');
-      }
-    }
-
-    // ── Map ────────────────────────────────
-    function renderMap(stops) {
-      const validStops = stops.filter(s => s.lat !== null && s.lng !== null);
-      if (!validStops.length) return;
-
-      const initCenter = validStops.length > 1
-        ? [(validStops[0].lat + validStops[validStops.length-1].lat) / 2,
-           (validStops[0].lng + validStops[validStops.length-1].lng) / 2]
-        : [validStops[0].lat, validStops[0].lng];
-
-      if (!map) {
-        map = L.map('map', { attributionControl: false }).setView(initCenter, 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '&copy; OpenStreetMap'
-        }).addTo(map);
-      }
-
-      // Fix map size when container was previously hidden
-      map.invalidateSize();
-
-      map.eachLayer(l => {
-        if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l);
-      });
-
-      const markers = [];
-      validStops.forEach((s, idx) => {
-        let cls = 'marker-mid';
-        let label = s.num || '';
-        if (s.num === 0) { cls = 'marker-start'; label = '起'; }
-        else if (idx === validStops.length - 1 && s.num !== 0) { cls = 'marker-end'; label = '终'; }
-
-        const icon = L.divIcon({
-          html: `<div class="custom-marker ${cls}">${label}</div>`,
-          iconSize: [28, 28], iconAnchor: [14, 14], className: '',
-        });
-        const popup = `<b>${s.name}</b>` +
-          (s.rating ? `<br>⭐ ${s.rating}` : '') +
-          (s.price ? `<br>💰 ¥${s.price}` : '') +
-          (s.address ? `<br>📍 ${s.address}` : '');
-        markers.push(L.marker([s.lat, s.lng], { icon }).addTo(map).bindPopup(popup));
-      });
-
-      if (validStops.length > 1) {
-        L.polyline(validStops.map(s => [s.lat, s.lng]), {
-          color: '#2563eb', weight: 3, opacity: 0.7, dashArray: '8,5'
-        }).addTo(map);
-      }
-
-      const group = new L.featureGroup(markers);
-      map.fitBounds(group.getBounds().pad(0.15));
-    }
-
-    // ── Chat / Modify ───────────────────────
-    async function modifyRoute() {
-      const input = $('chatInput').value.trim();
-      if (!input || !sessionId) return;
-
-      const status = $('chatStatus');
-      const btn = $('chatBtn');
-      status.textContent = '修改中...';
-      btn.disabled = true;
-
-      try {
-        const resp = await authFetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: input, session_id: sessionId }),
-        });
-        const data = await resp.json();
-        if (data.error) {
-          status.textContent = '修改失败：' + data.error;
-          btn.disabled = false;
-          return;
-        }
-        status.textContent = '修改完成';
-        btn.disabled = false;
-        $('chatInput').value = '';
-        lastResultData = data;
-        showResult(data);
-        addHistory(input, data);
-      } catch (err) {
-        status.textContent = '修改失败：' + err.message;
-        btn.disabled = false;
-      }
-    }
-
-    // ── Init ───────────────────────────────
-    renderHistoryList();
-  </script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

@@ -260,6 +260,86 @@ class UserProfileManager:
         data = self.load()
         return data.get("session", {})
 
+    # ── 画像学习 ──────────────────────────────────────
+
+    def update_from_route(self, stops: list, keywords: list = None,
+                           budget: str = None, city: str = None):
+        """从用户完成的路线中学习偏好."""
+        data = self.load()
+        profile = data.setdefault("profile", {})
+        learned = data.setdefault("learned", {})
+
+        # 品类偏好（累积计数）
+        cats = learned.setdefault("preferred_cats", {})
+        for s in stops:
+            cat = (s.get("category") or "").split(";")[-1] if ";" in (s.get("category") or "") else s.get("category", "")
+            if cat:
+                cats[cat] = cats.get(cat, 0) + 1
+
+        # 区域偏好
+        districts = learned.setdefault("preferred_districts", {})
+        for s in stops:
+            addr = s.get("address", "")
+            if addr and len(addr) >= 2:
+                # 简单提取区级信息
+                for d in ["雁塔", "碑林", "莲湖", "未央", "新城", "灞桥", "长安", "临潼", "曲江"]:
+                    if d in addr:
+                        districts[d] = districts.get(d, 0) + 1
+                        break
+
+        # 预算历史
+        if budget:
+            budgets = learned.setdefault("budget_history", [])
+            budgets.append(budget)
+            if len(budgets) > 50:
+                budgets[:] = budgets[-50:]
+
+        # 关键词偏好
+        if keywords:
+            kws = learned.setdefault("keyword_history", [])
+            for kw in keywords:
+                kws.append(kw)
+            if len(kws) > 100:
+                kws[:] = kws[-100:]
+
+        # 常用城市
+        if city:
+            cities = learned.setdefault("cities", {})
+            cities[city] = cities.get(city, 0) + 1
+
+        self._write(data)
+
+    def get_preference_context(self) -> str:
+        """生成注入 LLM 的用户偏好摘要."""
+        data = self.load()
+        learned = data.get("learned", {})
+        parts = []
+
+        cats = learned.get("preferred_cats", {})
+        if cats:
+            top = sorted(cats.items(), key=lambda x: x[1], reverse=True)[:5]
+            parts.append(f"偏好品类：{', '.join(c[0] for c in top)}")
+
+        districts = learned.get("preferred_districts", {})
+        if districts:
+            top = sorted(districts.items(), key=lambda x: x[1], reverse=True)[:3]
+            parts.append(f"常去区域：{', '.join(d[0] for d in top)}")
+
+        budgets = learned.get("budget_history", [])
+        if budgets:
+            from collections import Counter
+            bc = Counter(budgets)
+            top_budget = bc.most_common(1)[0][0]
+            budget_label = {"low": "低", "medium": "中", "high": "高"}.get(top_budget, top_budget)
+            parts.append(f"预算偏好：{budget_label}")
+
+        cities = learned.get("cities", {})
+        if cities:
+            top_city = max(cities, key=cities.get)
+            parts.append(f"常用城市：{top_city}")
+
+        return "; ".join(parts) if parts else ""
+
     # ── 重置 ──────────────────────────────────────────
 
     def reset(self):

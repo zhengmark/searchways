@@ -9,13 +9,15 @@ from app.shared.utils import AgentSession
 
 
 def run_multi_agent(user_input: str, session: AgentSession = None,
-                    user_id: str = "default") -> tuple:
+                    user_id: str = "default",
+                    progress_callback=None) -> tuple:
     """统一路线规划入口，支持多轮对话.
 
     Args:
         user_input: 用户当前输入
         session: AgentSession（内部使用，可传 None）
         user_id: 用户 ID（默认 "default"）
+        progress_callback: SSE 进度回调 emoji,msg
 
     Returns:
         (回复文本, AgentSession)
@@ -24,4 +26,5 @@ def run_multi_agent(user_input: str, session: AgentSession = None,
         session = AgentSession()
 
     from app.core.route_agent import run_unified_agent
-    return run_unified_agent(user_input, session, user_id)
+    return run_unified_agent(user_input, session, user_id,
+                             progress_callback=progress_callback)

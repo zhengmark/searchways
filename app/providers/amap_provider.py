@@ -8,6 +8,11 @@ AMAP_PLACE_TEXT_API = "https://restapi.amap.com/v3/place/text"
 AMAP_PLACE_AROUND_API = "https://restapi.amap.com/v3/place/around"
 AMAP_GEOCODE_API = "https://restapi.amap.com/v3/geocode/geo"
 AMAP_INPUT_TIPS_API = "https://restapi.amap.com/v3/assistant/inputtips"
+AMAP_WALKING_API = "https://restapi.amap.com/v3/direction/walking"
+AMAP_TRANSIT_API = "https://restapi.amap.com/v3/direction/transit/integrated"
+AMAP_BIKING_API = "https://restapi.amap.com/v4/direction/bicycling"
+AMAP_DRIVING_API = "https://restapi.amap.com/v3/direction/driving"
+AMAP_REGEO_API = "https://restapi.amap.com/v3/geocode/regeo"
 
 
 class AmapAPIError(Exception):
@@ -304,3 +309,281 @@ def batch_get_poi_details(amap_ids: list, delay: float = 0.1) -> dict:
         else:
             time.sleep(delay)
     return results
+
+
+def reverse_geocode(lat: float, lng: float) -> dict:
+    """经纬度转地址。返回 {address, city, district, name}."""
+    _check_key()
+    try:
+        params = {
+            "key": AMAP_API_KEY,
+            "location": f"{lng},{lat}",
+            "extensions": "base",
+        }
+        resp = requests.get(AMAP_REGEO_API, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return {"address": "", "city": "", "district": "", "name": ""}
+
+    if data.get("status") != "1":
+        return {"address": "", "city": "", "district": "", "name": ""}
+
+    regeo = data.get("regeocode", {})
+    addr_comp = regeo.get("addressComponent", {})
+    return {
+        "address": regeo.get("formatted_address", ""),
+        "city": addr_comp.get("city", "").rstrip("市") or addr_comp.get("province", ""),
+        "district": addr_comp.get("district", ""),
+        "name": addr_comp.get("township", "") or regeo.get("formatted_address", ""),
+    }
+
+
+def search_top_attractions(city: str, location: str = None, limit: int = 10) -> list:
+    """搜索城市热门景点 — 用高德 weight 排序搜著名景点/地标."""
+    _check_key()
+    try:
+        params = {
+            "key": AMAP_API_KEY,
+            "keywords": "风景名胜|国家级景点|著名景点|必游|地标",
+            "city": city,
+            "offset": min(limit * 2, 25),
+            "extensions": "all",
+            "sortrule": "weight",
+        }
+        if location:
+            params["location"] = location
+            params["radius"] = 30000
+            resp = requests.get(AMAP_PLACE_AROUND_API, params=params, timeout=10)
+        else:
+            resp = requests.get(AMAP_PLACE_TEXT_API, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+
+    if data.get("status") != "1":
+        return []
+
+    pois = [_build_poi_dict(p) for p in data.get("pois", [])]
+    pois.sort(key=lambda x: (x.get("rating") or 0), reverse=True)
+    return pois[:limit]
+
+
+# ═══════════════════════════════════════════════
+# 路线规划 API（步行 / 骑行 / 公交地铁 / 驾车）
+# ═══════════════════════════════════════════════
+
+def _retry_direction(url: str, params: dict, max_retries: int = 2, timeout: int = 10) -> dict | None:
+    """路线 API 带重试，返回 JSON 或 None."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            return data
+        except requests.Timeout:
+            last_error = "timeout"
+        except requests.ConnectionError:
+            last_error = "connection"
+        except requests.RequestException as e:
+            last_error = str(e)
+        if attempt < max_retries:
+            time.sleep(0.5 * (attempt + 1))
+    return None
+
+
+def get_walking_route(origin: str, destination: str) -> dict | None:
+    """步行路线规划.
+
+    Args:
+        origin: "lng,lat"
+        destination: "lng,lat"
+
+    Returns:
+        {"success": True, "distance": int(m), "duration": int(sec), "mode": "步行", "steps": [...]}
+        失败返回 None
+    """
+    _check_key()
+    data = _retry_direction(AMAP_WALKING_API, {
+        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
+    })
+    if not data or data.get("status") != "1":
+        return None
+
+    paths = data.get("route", {}).get("paths")
+    if not paths:
+        return None
+
+    p = paths[0]
+    steps = [{"instruction": s.get("instruction", ""),
+              "distance": int(s.get("distance", 0)),
+              "duration": int(s.get("duration", 0)),
+              "road": s.get("road", "")}
+             for s in p.get("steps", [])]
+
+    return {
+        "success": True,
+        "distance": int(p.get("distance", 0)),
+        "duration": int(p.get("duration", 0)),
+        "mode": "步行",
+        "cost": 0.0,
+        "steps": steps,
+    }
+
+
+def transit_route(origin: str, destination: str, city: str = "西安",
+                  strategy: int = 0) -> dict | None:
+    """公交/地铁路线规划.
+
+    Args:
+        origin: "lng,lat"
+        destination: "lng,lat"
+        city: 城市名
+        strategy: 0=最快, 1=最少换乘, 2=最少步行, 5=不坐地铁, 6=优先地铁
+
+    Returns:
+        {"success": True, "distance": int(m), "duration": int(sec),
+         "mode": "公交/地铁", "cost": float, "steps": [...]}
+        失败返回 None
+    """
+    _check_key()
+    data = _retry_direction(AMAP_TRANSIT_API, {
+        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
+        "city": city, "strategy": strategy, "extensions": "all",
+    })
+    if not data or data.get("status") != "1":
+        return None
+
+    transits = data.get("route", {}).get("transits")
+    if not transits:
+        return None
+
+    t = transits[0]
+    steps = []
+    for seg in t.get("segments", []):
+        bus = seg.get("bus", {})
+        buslines = bus.get("buslines", [])
+        walk = seg.get("walking", {})
+
+        if buslines:
+            bl = buslines[0]
+            dep = bl.get("departure_stop", {})
+            arr = bl.get("arrival_stop", {})
+            dep_name = dep.get("name", str(dep)) if isinstance(dep, dict) else str(dep)
+            arr_name = arr.get("name", str(arr)) if isinstance(arr, dict) else str(arr)
+            line_type = bl.get("type", "")
+            steps.append({
+                "mode": "地铁" if "地铁" in line_type else "公交",
+                "line_name": bl.get("name", ""),
+                "start_stop": dep_name,
+                "end_stop": arr_name,
+                "station_count": int(bl.get("station_count", 0)),
+                "duration": int(bl.get("duration", 0)),
+            })
+        elif walk:
+            steps.append({
+                "mode": "步行",
+                "line_name": "",
+                "start_stop": "",
+                "end_stop": "",
+                "station_count": 0,
+                "distance": int(walk.get("distance", 0)),
+                "duration": int(walk.get("duration", 0)),
+            })
+
+    return {
+        "success": True,
+        "distance": int(t.get("distance", 0)),
+        "duration": int(t.get("duration", 0)),
+        "mode": "公交/地铁",
+        "cost": float(t.get("cost", 0)),
+        "steps": steps,
+    }
+
+
+def biking_route(origin: str, destination: str) -> dict | None:
+    """骑行路线规划.
+
+    Args:
+        origin: "lng,lat"
+        destination: "lng,lat"
+
+    Returns:
+        {"success": True, "distance": int(m), "duration": int(sec), "mode": "骑行", "steps": [...]}
+        失败返回 None
+
+    Note: 使用高德 v4 API，响应格式是 errcode/errmsg/data 而非 status/info/route.
+    """
+    _check_key()
+    data = _retry_direction(AMAP_BIKING_API, {
+        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
+    })
+    if not data:
+        return None
+
+    # v4 API: errcode=0 表示成功
+    if data.get("errcode") != 0:
+        return None
+
+    paths = data.get("data", {}).get("paths")
+    if not paths:
+        return None
+
+    p = paths[0]
+    steps = [{"instruction": s.get("instruction", ""),
+              "distance": int(s.get("distance", 0)),
+              "duration": int(s.get("duration", 0)),
+              "road": s.get("road", "")}
+             for s in p.get("steps", [])]
+
+    return {
+        "success": True,
+        "distance": int(p.get("distance", 0)),
+        "duration": int(p.get("duration", 0)),
+        "mode": "骑行",
+        "cost": 0.0,
+        "steps": steps,
+    }
+
+
+def driving_route(origin: str, destination: str) -> dict | None:
+    """驾车路线规划.
+
+    Args:
+        origin: "lng,lat"
+        destination: "lng,lat"
+
+    Returns:
+        {"success": True, "distance": int(m), "duration": int(sec),
+         "mode": "驾车", "cost": float(tolls), "steps": [...]}
+        失败返回 None
+    """
+    _check_key()
+    data = _retry_direction(AMAP_DRIVING_API, {
+        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
+        "extensions": "all",
+    })
+    if not data or data.get("status") != "1":
+        return None
+
+    paths = data.get("route", {}).get("paths")
+    if not paths:
+        return None
+
+    p = paths[0]
+    steps = [{"instruction": s.get("instruction", ""),
+              "distance": int(s.get("distance", 0)),
+              "duration": int(s.get("duration", 0)),
+              "road": s.get("road", "")}
+             for s in p.get("steps", [])]
+
+    return {
+        "success": True,
+        "distance": int(p.get("distance", 0)),
+        "duration": int(p.get("duration", 0)),
+        "mode": "驾车",
+        "cost": float(p.get("tolls", 0)),
+        "steps": steps,
+    }

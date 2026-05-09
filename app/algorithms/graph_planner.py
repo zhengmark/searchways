@@ -1,31 +1,29 @@
 """图路线规划引擎 — 加权图建模 + 投影分段路径选取."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.algorithms.routing import walk_distance
+from app.algorithms.routing import get_route, decide_transport
 from app.algorithms.geo import haversine, project_ratio
 
-# 步行 API 只在短距离节点间调用；远距离直接用 haversine 估算
+# 每个节点只对最近的 K 个邻居调用真实路线 API
 _API_DISTANCE_THRESHOLD_M = 3000
-# 每个节点只对最近的 K 个邻居调用步行 API
 _K_NEAREST = 8
 
-_SPEED_FACTOR = {"步行": 1.0, "骑行": 3.0, "公交/地铁": 2.0, "打车": 5.0}
 
-
-def decide_transport(distance_meters: int) -> str:
-    if distance_meters < 800:
-        return "步行"
-    if distance_meters <= 3000:
-        return "骑行"
-    if distance_meters <= 8000:
-        return "公交/地铁"
-    return "打车"
-
-
-def _haversine_estimate(lat1, lng1, lat2, lng2):
-    """用 haversine 直线距离估算步行距离和耗时."""
+def _haversine_fallback(lat1, lng1, lat2, lng2, mode: str):
+    """API 失败时的 haversine 兜底估算（按交通模式调节）."""
     straight = haversine(lat1, lng1, lat2, lng2)
-    return int(straight * 1.4), int(straight * 1.4 / 1.3)
+    road_factor = 1.4
+    if mode == "步行":
+        speed = 1.25          # ~4.5 km/h 步行
+    elif mode == "骑行":
+        speed = 4.0           # ~14.4 km/h 骑行
+    elif mode == "公交/地铁":
+        speed = 6.5           # ~23 km/h 含等车/换乘
+    else:  # 驾车
+        speed = 8.0           # ~29 km/h 城市路况
+    dist = int(straight * road_factor)
+    dur = int(dist / speed)
+    return dist, dur
 
 
 def pre_prune_pois(pois: list, max_pois: int = 15,
@@ -111,23 +109,21 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
             if d <= _API_DISTANCE_THRESHOLD_M:
                 api_pairs.add((min(i, j), max(i, j)))
 
-    # 阶段3: 并行调用步行 API（仅 api_pairs 中的边）
+    # 阶段3: 并行调用真实路线 API（按 haversine 距离自动选模式）
     def _fetch(i, j):
         ni, nj = nodes[i], nodes[j]
         c1, c2 = f"{ni['lng']},{ni['lat']}", f"{nj['lng']},{nj['lat']}"
-        walk_dist = walk_dur = None
+        dist = haversine(ni["lat"], ni["lng"], nj["lat"], nj["lng"])
+        mode = decide_transport(dist)
         try:
-            result = walk_distance(c1, c2)
-            if result:
-                walk_dist, walk_dur = result["distance"], result["duration"]
+            result = get_route(c1, c2, mode=mode)
+            if result is not None:
+                return result["distance"], result["duration"], result["mode"]
         except Exception:
             pass
-        if walk_dist is None:
-            walk_dist, walk_dur = _haversine_estimate(ni["lat"], ni["lng"],
-                                                       nj["lat"], nj["lng"])
-        transport = decide_transport(walk_dist)
-        factor = _SPEED_FACTOR.get(transport, 1.0)
-        return walk_dist, int(walk_dur / factor), transport
+        fallback_dist, fallback_dur = _haversine_fallback(ni["lat"], ni["lng"],
+                                                          nj["lat"], nj["lng"], mode)
+        return fallback_dist, fallback_dur, mode
 
     if api_pairs:
         with ThreadPoolExecutor(max_workers=10) as pool:
@@ -138,20 +134,20 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
                 edge = {"distance": dist, "duration": dur, "transport": transport}
                 graph[i][j] = graph[j][i] = edge
 
-    # 阶段4: 剩余边用 haversine 估算
+    # 阶段4: 剩余边用 haversine 兜底估算
     for i in range(n):
         for j in range(i + 1, n):
             if graph[i][j] is not None:
                 continue
             ni, nj = nodes[i], nodes[j]
-            walk_dist, walk_dur = _haversine_estimate(ni["lat"], ni["lng"],
-                                                       nj["lat"], nj["lng"])
-            transport = decide_transport(walk_dist)
-            factor = _SPEED_FACTOR.get(transport, 1.0)
+            straight = haversine(ni["lat"], ni["lng"], nj["lat"], nj["lng"])
+            mode = decide_transport(straight)
+            dist, dur = _haversine_fallback(ni["lat"], ni["lng"],
+                                            nj["lat"], nj["lng"], mode)
             graph[i][j] = graph[j][i] = {
-                "distance": walk_dist,
-                "duration": int(walk_dur / factor),
-                "transport": transport,
+                "distance": dist,
+                "duration": dur,
+                "transport": mode,
             }
 
     return nodes, graph

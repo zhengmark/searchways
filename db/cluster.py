@@ -48,31 +48,44 @@ _KEYWORD_TO_SUBCAT = {
     "酒店": ["酒店", "宾馆", "住宿"],
     "洗浴": ["洗浴", "足疗", "按摩"],
     "运动": ["运动", "健身", "游泳"],
+    "夜市": ["夜市", "小吃", "烧烤", "火锅", "串串"],
+    "清真": ["清真", "清真菜馆", "西北", "小吃", "泡馍", "烧烤"],
+    "回民街": ["清真", "泡馍", "小吃", "夜市", "烧烤", "火锅", "串串"],
+    "拍照": ["景点", "咖啡", "甜品", "公园", "图书馆"],
+    "约会": ["咖啡", "甜品", "景点", "公园", "小吃", "西餐", "日料"],
+    "安静": ["咖啡", "图书馆", "茶馆", "公园", "书店"],
+    "泡馍": ["泡馍", "西北", "清真", "面馆", "中餐"],
 }
 
 # 预算范围
 _BUDGET_RANGES = {"low": (0, 40), "medium": (30, 100), "high": (80, 9999)}
+
+# 非旅游品类黑名单 — 只过滤所有品类都是无关杂项的簇
+_NON_TOURIST_CATS = {
+    "便民商店/便利店", "便民商店", "便利店", "烟酒专卖店",
+    "专营店", "汽车", "维修", "中介", "房产", "打印", "图文", "广告",
+    "快印", "印刷", "洗车", "药店", "诊所", "医院", "培训",
+    "服装鞋帽皮具店", "棋牌室",
+}
 
 
 def _keyword_matches_subcats(keywords: list, top_cats: list, top_names: list) -> bool:
     """检查关键词列表是否匹配簇的品类或 POI 名称."""
     for kw in keywords:
         kw_lower = kw.lower()
-        # 检查直接品类匹配
-        for cat in top_cats:
-            if kw_lower in cat.lower():
-                return True
-        # 检查关键词→子品类映射
+        # 收集所有需要匹配的词：原始关键词 + 映射词
         mapped_terms = _KEYWORD_TO_SUBCAT.get(kw, [kw])
-        for term in mapped_terms:
+        all_terms = [kw] + mapped_terms
+        for term in all_terms:
             term_lower = term.lower()
+            # 检查品类匹配
             for cat in top_cats:
                 if term_lower in cat.lower():
                     return True
-        # 检查 POI 名称匹配
-        for name in top_names:
-            if kw_lower in name.lower():
-                return True
+            # 检查 POI 名称匹配（扩展：映射词也查名称）
+            for name in top_names:
+                if term_lower in name.lower():
+                    return True
     return False
 
 
@@ -155,10 +168,22 @@ def query_clusters(lat: float, lng: float, limit: int = 10) -> list:
         return [dict(r) for r in rows]
 
 
+def _project_ratio(lat, lng, o_lat, o_lng, d_lat, d_lng):
+    """计算点在 OD 线段上的投影比例 0-1。0=起点, 1=终点."""
+    if d_lat is None or d_lng is None:
+        return 0.0
+    dx = d_lat - o_lat
+    dy = d_lng - o_lng
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return 0.0
+    t = ((lat - o_lat) * dx + (lng - o_lng) * dy) / (dx * dx + dy * dy)
+    return max(0.0, min(1.0, t))
+
+
 def query_corridor_clusters(origin_lat: float, origin_lng: float,
                               dest_lat: float = None, dest_lng: float = None,
                               keywords: list = None, budget: str = None,
-                              corridor_width_km: float = 5.0) -> list:
+                              corridor_width_km: float = 6.0) -> list:
     """查询起终点走廊内的 POI 聚簇，返回 LLM 可理解的簇摘要.
 
     每个簇包含:
@@ -290,6 +315,15 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
             if not _keyword_matches_subcats(keywords, top_cats, cluster_names):
                 continue
 
+        # 过滤全部品类都是无关杂项的簇
+        if top_cats and all(tc in _NON_TOURIST_CATS for tc in top_cats):
+            continue
+
+        # 计算投影比例（点在路线上的位置：0=起点, 1=终点）
+        proj = _project_ratio(center_lat, center_lng,
+                              origin_lat, origin_lng,
+                              dest_lat or origin_lat, dest_lng or origin_lng)
+
         # 自动生成簇名称
         cluster_name = _cluster_name(district_by_cluster.get(cid, ""), top_cats, top_pois.get(cid, []))
 
@@ -299,6 +333,7 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
             "center_lat": round(center_lat, 5),
             "center_lng": round(center_lng, 5),
             "dist_from_origin_km": round(dist_km, 1),
+            "projection": round(proj, 2),
             "poi_count": row["cnt"],
             "top_cats": top_cats,
             "avg_rating": round(avg_rating, 1) if avg_rating else None,
@@ -306,7 +341,8 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
             "top_poi_names": top_pois.get(cid, []),
         })
 
-    results.sort(key=lambda x: x["dist_from_origin_km"])
+    # Sort by projection ratio to show even distribution along route
+    results.sort(key=lambda x: x["projection"])
     return results
 
 

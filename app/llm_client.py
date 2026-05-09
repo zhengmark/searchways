@@ -1,5 +1,6 @@
 """Shared LLM API client — single source of truth for all agents."""
 import json
+import random
 import time
 import requests
 from app.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
@@ -10,13 +11,20 @@ _RETRY_BASE_DELAY = 2  # 秒，指数退避起点
 
 
 def _retry_request(headers: dict, payload: dict, timeout: int = 120) -> dict:
-    """带指数退避的 API 请求，处理 429/5xx."""
+    """带指数退避+随机抖动的 API 请求，处理 429/5xx/timeout."""
     last_error = None
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.post(API_URL, headers=headers, json=payload, timeout=timeout)
             if resp.status_code == 429:
-                delay = _RETRY_BASE_DELAY ** (attempt + 1)
+                delay = _RETRY_BASE_DELAY ** (attempt + 1) + random.uniform(0, 1)
+                time.sleep(delay)
+                last_error = resp
+                continue
+            if resp.status_code in (401, 403):
+                raise Exception(f"API 认证失败 ({resp.status_code})，请检查 LLM_API_KEY")
+            if resp.status_code >= 500:
+                delay = _RETRY_BASE_DELAY ** (attempt + 1) + random.uniform(0, 1)
                 time.sleep(delay)
                 last_error = resp
                 continue
@@ -25,11 +33,17 @@ def _retry_request(headers: dict, payload: dict, timeout: int = 120) -> dict:
         except requests.exceptions.Timeout:
             last_error = Exception(f"请求超时({timeout}s)")
             if attempt < _MAX_RETRIES - 1:
-                time.sleep(_RETRY_BASE_DELAY)
+                time.sleep(_RETRY_BASE_DELAY + random.uniform(0, 1))
+        except requests.exceptions.ConnectionError:
+            last_error = Exception("无法连接到 LLM API")
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BASE_DELAY + random.uniform(0, 2))
         except requests.exceptions.RequestException as e:
             if attempt < _MAX_RETRIES - 1:
-                time.sleep(_RETRY_BASE_DELAY)
+                time.sleep(_RETRY_BASE_DELAY + random.uniform(0, 1))
             last_error = e
+        except Exception:
+            raise  # 不重试非网络异常（如上面抛的认证失败）
     if last_error is not None:
         if isinstance(last_error, requests.models.Response):
             last_error = Exception(f"{last_error.status_code} {last_error.reason}")

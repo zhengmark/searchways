@@ -61,3 +61,6 @@ def deduplicate_by_name(pois: list) -> list:
             seen.add(n)
             unique.append(p)
     return unique
+
+
+dedup_pois = deduplicate_by_name  # cluster_tools.py 兼容别名

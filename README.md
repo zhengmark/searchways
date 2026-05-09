@@ -1,14 +1,14 @@
 # 现在就出发 — AI 本地路线智能规划
 
-美团 AI 黑客松项目。**用户用自然语言描述出行需求，Agent 自动规划一条结合 POI 数据、评分和偏好的本地路线**，输出 LLM 个性化解说 + Mermaid 路线图 + Leaflet 交互地图。
+美团 AI 黑客松项目。**用户用自然语言描述出行需求，AI Agent 自动规划路线**，提供交互式地图编辑 + 个性化推荐 + LLM 解说 + Mermaid 路线图。
 
 ```
-用户: "从丈八六路去钟楼吃火锅，3小时，人均100以内"
+用户: "从西安北站到曲江转一圈，想吃美食看景点，半天时间"
 
-Agent: geocode(丈八六路) → geocode(钟楼) → query_clusters(火锅, medium)
-       → build_route([187, 317, 400]) → 解说 + Mermaid 图
+Agent: geocode(西安北站) → geocode(曲江) → query_clusters(美食, 景点)
+       → build_route([5个均匀分布的簇]) → 地图交互编辑 → 确认路线 → 个性化解说
 
-输出: 一条3站火锅路线，附每站交通方式/耗时/推荐理由/人均消费，Mermaid路线图，交互地图
+输出: 均匀分布的路线 + 推荐备选POI + 交通方式标注 + Mermaid图 + 交互地图
 ```
 
 ## 快速开始
@@ -21,20 +21,42 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env，填入 LLM_API_KEY 和 AMAP_API_KEY
 
-# 3. CLI 多轮对话
-USE_POI_DB=true python3 main.py
+# 3. Web 服务（http://localhost:8000）
+python3 -m uvicorn web.server:app --host 0.0.0.0 --port 8000
 
-# 4. Web 服务（http://localhost:8000）
-USE_POI_DB=true uvicorn web.server:app --host 0.0.0.0 --port 8000
+# 4. Docker 一键部署
+./scripts/deploy.sh
 
-# 5. 命令行快速测试
-USE_POI_DB=true python3 -c "
+# 5. CLI 快速测试
+python3 -c "
 import sys; sys.path.insert(0, '.')
 from app.core.orchestrator import run_multi_agent
-result, s = run_multi_agent('从丈八六路地铁站出发到钟楼吃火锅')
+result, s = run_multi_agent('从西安北站到曲江转一圈')
 print(result)
 "
 ```
+
+## 核心特性
+
+### 智能路线规划
+- **统一 Agent 工具调用** — 单次 LLM 调用 + geocode/query_clusters/build_route 工具循环
+- **走廊感知 POI 推荐** — 1630+ 个 POI 沿路线走廊均匀分布，分 5 段各取 top 5 推荐
+- **城市热门景点发现** — 模糊查询自动注入高德热门景点 + 精选地标兜底
+- **模糊查询友好** — "不知道去哪玩"自动推荐城市必去景点
+
+### 交互式地图编辑
+- **路段交通标注** — hover 显示交通方式(🚶/🚇/🚌)+ 时间，不同颜色不同交通
+- **推荐 POI 可选** — 虚线圆圈标记备选 POI，点击加入路线
+- **拖拽排序** — 侧边栏 HTML5 DnD 自由调整游览顺序
+- **颜色图例** — 地图左上角自动显示品类颜色图例
+- **确认路线** — 确认后生成 LLM 个性化解说 + Mermaid 路线图
+
+### 个性化 & 稳定性
+- **用户画像学习** — 从完成路线自动学习品类/区域/预算偏好
+- **偏好注入** — 用户偏好自动注入 LLM context，越用越准
+- **Session TTL** — 24 小时自动过期 + 后台清理
+- **LLM 自动重试** — 指数退避 + 随机抖动 + 错误分类
+- **输入校验** — 空查询/无效参数统一返回 422
 
 ## 架构
 
@@ -42,82 +64,97 @@ print(result)
 用户输入
   │
   ▼
-┌──────────────────────────────────────┐
-│  orchestrator.py (27行)              │
-│  统一入口 → run_unified_agent()       │
-└──────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  orchestrator.py                        │
+│  统一入口 → run_unified_agent()          │
+└─────────────────────────────────────────┘
   │
   ▼
-┌──────────────────────────────────────┐
-│  route_agent.py (361行) ★核心        │
-│                                      │
-│  LLM (系统 prompt + 3 tools)         │
-│    │                                 │
-│    ├─ geocode(place, city)           │
-│    │    → 高德API 4层兜底解析         │
-│    │                                 │
-│    ├─ query_clusters(origin, dest,   │
-│    │    keywords, budget)            │
-│    │    → SQLite 走廊聚簇摘要         │
-│    │    → ~8ms，995个预计算簇         │
-│    │                                 │
-│    └─ build_route(cluster_ids,       │
-│         num_stops)                   │
-│         → graph_planner 建图+选路径   │
-│         → ~6s，K=8近邻+预剪枝        │
-│                                      │
-│  LLM 生成: 个性化解说 + Mermaid 路线图 │
-└──────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  route_agent.py ★核心                    │
+│                                         │
+│  LLM (系统 prompt + 3 tools)            │
+│    │                                    │
+│    ├─ geocode(place, city)              │
+│    │    → 高德API 4层兜底解析             │
+│    │                                    │
+│    ├─ query_clusters(origin, dest,      │
+│    │    keywords, budget)               │
+│    │    → SQLite 走廊聚簇摘要            │
+│    │    → projection 排序确保均匀分布     │
+│    │    → 热门景点自动注入               │
+│    │                                    │
+│    └─ build_route(cluster_ids,          │
+│         num_stops)                      │
+│         → graph_planner 建图+选路径      │
+│         → corridor_engine 加载全量 POI   │
+│                                         │
+│  LLM 生成: 个性化解说                    │
+└─────────────────────────────────────────┘
   │
   ▼
-输出: 解说文本 + Mermaid图 + Leaflet交互地图 + 用户画像更新
+┌─────────────────────────────────────────┐
+│  Web 交互式编辑                          │
+│                                         │
+│  ┌──────────┐  ┌───────────────────┐    │
+│  │ Leaflet   │  │  侧边栏            │    │
+│  │ 地图      │  │  · 路线摘要        │    │
+│  │ · 路线    │  │  · 站点列表(可拖拽) │    │
+│  │ · 推荐POI │  │  · 备选POI [+加入]  │    │
+│  │ · 交通标注│  │  · [确认路线]       │    │
+│  │ · 图例    │  │  · 聊天修改         │    │
+│  └──────────┘  └───────────────────┘    │
+│                                         │
+│  确认 → LLM解说 + Mermaid图 + 偏好学习   │
+└─────────────────────────────────────────┘
 ```
 
 **关键设计决策：**
-- **LLM 管聚簇，算法管 POI** — 聚簇有语义标签（品类/价格/评分），LLM 可理解；具体 POI 的选择和路线计算由算法完成
+- **LLM 管聚簇，算法管 POI** — 聚簇有语义标签（品类/价格/评分），LLM 可理解；具体 POI 选择和路线计算由算法完成
+- **全量 corridor 覆盖** — 用全部查询到的簇（~31 个）加载推荐 POI，而非 LLM 选的 4-5 个
+- **分段均匀选取** — 路线分 5 个投影段，每段各取 top 5 推荐 POI
 - **全量重规划替代增量修改** — 多轮对话每轮重新规划，比增量修改更鲁棒
 - **工具调用替代多 Agent 串行** — 1 次 LLM 调用 + 工具循环，替代原来 4 次 LLM 的 6 步串行管线
 
+## API 端点
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/` | — | HTML 单页应用 |
+| GET | `/api/health` | — | 健康检查（DB 状态 + session 数） |
+| POST | `/api/plan` | opt | 同步路线规划 |
+| POST | `/api/plan/stream` | opt | SSE 流式规划（实时进度） |
+| POST | `/api/chat` | opt | 多轮对话修改路线 |
+| GET | `/api/route/{id}` | — | 获取路线详情 |
+| POST | `/api/route/{id}/select-poi` | — | 添加 POI 到路线 |
+| POST | `/api/route/{id}/remove-poi` | — | 从路线移除 POI |
+| POST | `/api/route/{id}/reorder` | — | 重排站点顺序 |
+| POST | `/api/route/{id}/confirm` | opt | 确认路线（生成解说 + 学习偏好） |
+| POST | `/api/route/{id}/search-nearby` | — | 地图点击搜索周边 POI |
+| POST | `/api/route/{id}/add-custom` | — | 添加自定义站点 |
+| GET | `/api/profile` | opt | 获取用户画像 |
+| PUT | `/api/profile` | opt | 更新用户画像 |
+| GET | `/api/profile/suggestions` | opt | 个性化推荐 |
+| POST | `/api/auth/register` | — | 注册 |
+| POST | `/api/auth/login` | — | 登录 |
+| GET | `/api/auth/me` | Bearer | 验证 token |
+
 ## 使用示例
 
-### 单轮路线
-
-```bash
-USE_POI_DB=true python3 main.py
-```
+### Web 交互式规划
 
 ```
-你: 从丈八六路地铁站出发到钟楼，想吃火锅，3小时，人均不超过100
+http://localhost:8000
 
-出发酱: 🍲 火锅美食之旅
-
-## 路线概览
-总耗时约75分钟，精选3家高评分火锅店
-
-### 第1站: 胡龙飞酸菜串串 — ⭐4.0 ¥47
-🚌 公交/地铁 43分钟 | 酸菜串串+火锅，性价比之选
-
-### 第2站: MOMOPARK·海底捞火锅 — ⭐4.1 ¥54  
-🚕 打车 22分钟 | 品质服务，适合聚餐
-
-### 第3站: 钟楼银泰·海底捞火锅 — ⭐4.0 ¥56
-🚶 步行可达 | 吃完正好逛钟楼
-
-💡 建议提前在海底捞公众号预约，避开晚高峰排队
-
-```mermaid
-flowchart LR
-    classDef start fill:#10b981,color:#fff
-    classDef mid fill:#3b82f6,color:#fff
-    classDef end fill:#f59e0b,color:#fff
-    N0(["丈八六路地铁站"]):::start
-    N0 -->|"🚌 43分"| N1["🍲 胡龙飞酸菜串串"]:::mid
-    N1 -->|"🚕 22分"| N2["🍲 MOMOPARK"]:::mid
-    N2 -->|"🚶 10分"| N3["🏁 钟楼"]:::end
-```
+1. 在输入框输入"从西安北站到曲江转一圈" → 点击规划
+2. 地图显示路线（彩色分段 + 交通标注）+ 推荐备选 POI（虚线圆圈）
+3. hover 路段 → 显示"🚇 地铁2号线 20min"
+4. 点击推荐 POI → 加入路线
+5. 拖拽侧边栏站点 → 调整顺序
+6. 点击"确认路线" → LLM 个性化解说
 ```
 
-### 多轮对话
+### Python 多轮对话
 
 ```python
 from app.core.orchestrator import run_multi_agent
@@ -132,34 +169,6 @@ result2, s = run_multi_agent('不去钟楼了，去大雁塔', session=s)
 result3, s = run_multi_agent('要高档的，换日料', session=s)
 ```
 
-### Web 界面
-
-```
-http://localhost:8000
-
-端点:
-  GET  /                   HTML 单页应用
-  GET  /api/health         健康检查
-  POST /api/plan           新建路线
-  POST /api/plan/stream    SSE 流式进度推送
-  POST /api/chat           多轮对话修改
-```
-
-## 性能数据
-
-| 指标 | 高德 API 模式 | 本地 DB 模式 |
-|------|-------------|------------|
-| POI 搜索 | ~1169ms (API) | ~8ms (SQLite) |
-| 建图 | ~6s (步行API并发) | ~6s (相同) |
-| 单轮总耗时 | ~30-60s | ~12-15s |
-| POI 覆盖 | 西安全城 | 14,222 条 |
-| 聚类簇 | — | 995 个 (93.9%覆盖率) |
-
-**优化历程：**
-- 建图: ~90s→~6s (~15x) — haversine 快速通道 + K=8 近邻 + 预剪枝 top-15
-- 搜索: ~330ms→~8ms (~39x) — 网格法预计算 995 个聚类簇 + cluster_meta 缓存
-- LLM: 4次→1次 — 工具调用替代多 Agent 串行
-
 ## 配置
 
 | 变量 | 用途 | 默认值 |
@@ -168,7 +177,10 @@ http://localhost:8000
 | `LLM_BASE_URL` | LLM API 地址 | `https://api.longcat.chat/anthropic` |
 | `LLM_MODEL` | 模型名 | `LongCat-Flash-Lite` |
 | `AMAP_API_KEY` | 高德开放平台 Key | — |
-| `USE_POI_DB` | 启用本地 POI 数据库 | `false` |
+| `JWT_SECRET` | JWT 密钥 | `jwt-secret-change-me` |
+| `SESSION_TTL_HOURS` | Session 过期时间 | 24 |
+| `LOG_LEVEL` | 日志级别 | info |
+| `PORT` | 服务端口 | 8000 |
 
 ## 目录结构
 
@@ -177,92 +189,84 @@ my-first-app/
 ├── main.py                        # CLI 多轮对话入口
 ├── app/                           # 主 Python 包
 │   ├── config.py                  # 环境变量读取
-│   ├── llm_client.py              # LLM API 客户端（含 tool_use 支持）
+│   ├── llm_client.py              # LLM API 客户端（自动重试+抖动）
 │   ├── models.py                  # Pydantic 数据模型
-│   ├── user_profile.py            # 用户画像持久化
+│   ├── user_profile.py            # 用户画像持久化 + 偏好学习
 │   ├── core/                      # 核心编排
-│   │   ├── orchestrator.py        # 入口 (27行)
+│   │   ├── orchestrator.py        # 入口
 │   │   ├── route_agent.py         # ★ 统一 Agent — LLM 工具调用循环
 │   │   └── types.py               # Agent 间通信类型
 │   ├── pipeline/                  # 数据处理管线
-│   │   ├── cluster_tools.py       # ★ 工具定义 + geocode/query_clusters/build_route 实现
-│   │   ├── poi_pipeline.py        # POI 搜索 + DB 推荐
-│   │   └── route_pipeline.py      # 地理编码 + 路线引擎
-│   ├── providers/                 # 数据源抽象
-│   │   ├── base.py                # POIProvider ABC 接口
-│   │   ├── amap_provider.py       # 高德 API 封装
-│   │   └── provider.py            # 灰度切换入口
+│   │   ├── cluster_tools.py       # ★ 工具定义 + 实现 + 热门景点注入
+│   │   ├── corridor_engine.py     # ★ 走廊 POI 加载 + 投影 + 包络
+│   │   ├── reason_engine.py       # POI 推荐理由生成
+│   │   └── constraint_checker.py  # 约束校验
+│   ├── providers/                 # 数据源
+│   │   └── amap_provider.py       # 高德 API（搜索/地理编码/逆地理/路线）
 │   ├── algorithms/                # 纯算法
 │   │   ├── geo.py                 # Haversine / 投影比例
-│   │   ├── graph_planner.py       # 建图 + 最短路径（K近邻+预剪枝）
-│   │   ├── poi_filter.py          # POI 过滤（去重/品类/坐标）
-│   │   └── routing.py             # 高德步行 API
-│   ├── clustering/                # 离线聚类
-│   │   ├── geo_cluster.py         # 地理聚类 (DBSCAN)
-│   │   └── attr_cluster.py        # 属性聚类 (KMeans k=5)
-│   ├── recommender/               # 推荐引擎
-│   │   ├── recall.py              # 四路召回
-│   │   ├── rank.py                # 走廊感知精排 + 多样性贪心
-│   │   └── engine.py              # 统一推荐入口
+│   │   ├── graph_planner.py       # 建图 + 最短路径
+│   │   ├── poi_filter.py          # POI 过滤去重
+│   │   └── routing.py             # 高德步行/公交/骑行/驾车 API
 │   └── shared/                    # 共享工具
-│       ├── constants.py           # 关键词规范化 / 黑名单
-│       └── utils.py               # 城市提取 / Mermaid / HTML / AgentSession
+│       ├── constants.py           # 关键词规范化 / 黑名单 / 城市地标
+│       └── utils.py               # 城市提取 / Mermaid / AgentSession
 ├── db/                            # 数据库层
-│   ├── schema.py                  # 表结构
-│   ├── connection.py              # SQLite 连接管理
-│   ├── repository.py              # POIRepository — SQLite + Haversine
-│   ├── cluster.py                 # 聚类预计算 + 走廊查询
-│   ├── seed.py                    # 高德 API 数据灌入
-│   └── maintenance.py             # 增量数据维护
+│   ├── connection.py              # SQLite WAL + context manager
+│   ├── cluster.py                 # 聚类预计算 + 走廊查询 + 投影排序
+│   └── repository.py              # POI 查询
 ├── web/                           # FastAPI 网站
-│   ├── server.py                  # 5 端点 + SSE 流式
+│   ├── server.py                  # 18 端点 + SSE + session 管理 + 偏好学习
 │   ├── templates/index.html       # 单页 UI
-│   └── static/assets/leaflet/     # Leaflet CSS/JS
-├── tests/                         # 集成测试
-│   ├── test_user_scenarios.py     # 3 画像快速回归
-│   ├── test_ux_deep.py            # 5 画像深度体验
-│   ├── test_graph.py              # 单条路线集成测试
-│   ├── test_benchmark.py          # DB vs Amap 性能基准
-│   └── test_longcat.py            # LLM API 连通性
+│   └── static/
+│       ├── css/style.css          # 完整样式（图例/拖拽/错误/弹窗）
+│       └── js/
+│           ├── app.js             # 主控制器
+│           ├── map.js             # ★ Leaflet 地图（分段渲染+图例+hover tooltip）
+│           ├── route-editor.js    # ★ 交互编辑（拖拽排序/POI选取/确认路线）
+│           ├── corridor.js        # 走廊渲染
+│           └── utils.js           # 工具函数
+├── tests/                         # 测试
 ├── docs/                          # 文档
 │   ├── CONTEXT.md                 # 项目上下文
-│   └── ARCHITECTURE.md            # 架构文档
+│   ├── ARCHITECTURE.md            # 架构文档
+│   ├── landing-optimization.md    # ★ 落地优化报告 (2026-05-09)
+│   └── claude-code-modes.md       # Claude Code 模式指南
+├── scripts/
+│   └── deploy.sh                  # 一键部署脚本
+├── Dockerfile                     # Docker 镜像
+├── docker-compose.yml             # 容器编排
 └── data/                          # 运行时数据
-    ├── pois.db                    # SQLite POI 数据库 (14,222条)
-    ├── users/                     # 用户画像 JSON
-    └── output/                    # route_output.md / route_output.html
+    ├── pois.db                    # SQLite POI (14,222条)
+    ├── sessions/                  # 会话持久化
+    ├── users/                     # 用户画像 + 偏好学习
+    └── output/                    # 路线输出文件
 ```
 
 ## 运行测试
 
 ```bash
 # 所有测试调真实 API，会消耗配额
-python3 tests/test_user_scenarios.py    # 3 画像快速回归
-python3 tests/test_ux_deep.py           # 5 画像深度体验
+python3 tests/test_user_scenarios.py    # 场景回归
+python3 tests/test_phase5_eval.py       # 综合评估（8用户×多轮）
+python3 tests/test_friends.py           # 特殊需求测试（10用户）
 python3 tests/test_graph.py             # 单条路线集成测试
-
-# API 连通性
-python3 tests/test_longcat.py           # LLM API
-python3 tests/test_amap.py              # 高德 API
-
-# 性能基准
-USE_POI_DB=true python3 tests/test_benchmark.py
+python3 tests/test_benchmark.py         # DB vs Amap 性能基准
 
 # 数据库维护
 python3 -m db.cluster stats             # 聚类统计
 python3 -m db.cluster build             # 全量重算聚类
-python3 -m db.maintenance --task sync   # 同步 POI 数据
 ```
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| LLM | LongCat (Anthropic 兼容 API) — tool_use / system prompt |
-| 地图 | 高德开放平台 — 地理编码 / POI 搜索 / 步行路径 |
-| 数据库 | SQLite + Haversine 空间查询 — 14,222 条西安 POI |
-| Web | FastAPI + Jinja2 + SSE 流式推送 |
-| 前端 | Leaflet.js 交互地图 + Mermaid.js 路线图 |
-| 聚类 | 网格法预计算 (995簇) + DBSCAN + KMeans |
-| 推荐 | 四路召回 + 走廊感知精排 + MMR 多样性贪心 |
-| 并发 | ThreadPoolExecutor — 步行 API 并行 + LLM 后台调用 |
+| LLM | LongCat (Anthropic 兼容 API) — tool_use / system prompt / 自动重试 |
+| 地图 | 高德开放平台 — 地理编码 / POI 搜索 / 步行路径 / 逆地理编码 |
+| 数据库 | SQLite + Haversine — 14,222 条西安 POI / 995 个聚类簇 |
+| Web | FastAPI + Jinja2 + SSE 流式推送 + fcntl 文件锁 |
+| 前端 | Leaflet.js 地图 + Mermaid.js + HTML5 DnD |
+| 聚类 | 网格法预计算 + 走廊投影排序 + 杂项过滤 |
+| 部署 | Docker + docker-compose + 一键部署 + 健康检查 |
+| 个性化 | 画像学习 (品类/区域/预算) + LLM context 注入 |

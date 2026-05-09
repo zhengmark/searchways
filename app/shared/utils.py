@@ -37,16 +37,52 @@ class AgentSession:
         self.keywords = "美食,景点"
         self.last_user_input = ""
         self.review_score = 0
+        self.budget = ""
+        self.violations = []
+        self.last_clusters_hint = []
+
+        # ── Phase 2-4: 交互式编辑字段 ──
+        self.corridor_pois: list = []         # 走廊内所有候选 POI
+        self.corridor_clusters: list = []     # 簇中心坐标（画椭圆用）
+        self.corridor_shape: list = []        # 类椭圆包络多边形 [[lat,lng],...]
+        self.selected_poi_ids: list = []      # 用户确认选中的 POI ID
+        self.removed_poi_ids: list = []       # 用户主动移除的 POI ID
+        self.route_confirmed: bool = False    # 是否已点"确认路线"
+        self.graph_data: dict | None = None   # 序列化图（避免重复 ~80 次 API 调用）
+        self.recommendation_reasons: dict = {}  # {poi_id: {structured, user_need}}
+        self.transit_preferences: dict = {}   # {mode, avoid_transfers, ...}
+
+    def to_dict(self) -> dict:
+        """JSON 序列化."""
+        d = {}
+        for k, v in self.__dict__.items():
+            if isinstance(v, tuple):
+                d[k] = list(v)
+            elif isinstance(v, set):
+                d[k] = list(v)
+            else:
+                d[k] = v
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AgentSession":
+        """从 JSON 反序列化."""
+        s = cls()
+        for k, v in d.items():
+            if k == "origin_coords" and isinstance(v, list) and len(v) == 2:
+                v = tuple(v)
+            if k == "dest_coords" and isinstance(v, list) and len(v) == 2:
+                v = tuple(v)
+            if hasattr(s, k):
+                setattr(s, k, v)
+        return s
 
 
 # ── 进度打印 ──────────────────────────────────────────
 
-_progress_callback = None
-
-
-def _progress(emoji: str, msg: str):
-    if _progress_callback:
-        _progress_callback(emoji, msg)
+def _progress(emoji: str, msg: str, callback=None):
+    if callback:
+        callback(emoji, msg)
     else:
         print(f"  {emoji}  {msg}")
 
