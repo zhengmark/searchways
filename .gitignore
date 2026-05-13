@@ -9,9 +9,13 @@ node_modules/
 dist/
 *.egg-info/
 
-# Claude 内部文件
+# AI 助手配置（个人开发环境）
 .claude/
 .agents/
+CLAUDE.md
+HERMES.md
+cli-config.yaml
+hermes-gateway-override.conf
 
 # 生成的输出文件
 route_output.html
@@ -40,7 +44,5 @@ data/sessions/
 data/output/
 data/users/
 
-# Hermes Agent 日志
-.hermes/logs/
-.hermes/audio_cache/
-.hermes/voice-memos/
+# Hermes Agent（全部为个人开发环境文件）
+.hermes/
