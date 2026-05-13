@@ -1,5 +1,9 @@
 """4轮滚动测试 — 每轮淘汰满分用户，新增更刁钻场景，验证鲁棒性."""
-import json, time, sys, os
+
+import json
+import os
+import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -11,6 +15,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # ═══════════════════════════════════════════════════════════
 # 评分引擎
 # ═══════════════════════════════════════════════════════════
+
 
 def _rate(narration, stops, all_pois, session, elapsed, prev_keywords=None, user_input=""):
     """0-5 分制，7 个维度."""
@@ -33,7 +38,7 @@ def _rate(narration, stops, all_pois, session, elapsed, prev_keywords=None, user
 
     # 3. 品类多样性 (0.5)
     cats = set()
-    for p in (all_pois or []):
+    for p in all_pois or []:
         c = p.get("category", "")
         if c:
             cats.add(c)
@@ -50,7 +55,7 @@ def _rate(narration, stops, all_pois, session, elapsed, prev_keywords=None, user
         issues.append("解说/stops脱节")
 
     # 5. 约束保留 (0.5)
-    curr_kw = getattr(session, 'keywords', None)
+    curr_kw = getattr(session, "keywords", None)
     if prev_keywords:
         prev = prev_keywords if isinstance(prev_keywords, list) else [prev_keywords]
         kw_ok = any(k in str(curr_kw).lower() for k in (p.lower() for p in prev)) if curr_kw else True
@@ -91,30 +96,41 @@ def run_scenario(scenario):
 
             score, issues = _rate(narration, stops, all_pois, session, elapsed, prev_keywords, query)
 
-            results.append({
-                "round": i + 1, "query": query,
-                "narration_preview": narration[:200].replace("\n", " "),
-                "stops": stops, "num_stops": len(stops),
-                "city": session.city or "unknown",
-                "elapsed_s": elapsed, "score": round(score, 1),
-                "issues": issues,
-            })
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "narration_preview": narration[:200].replace("\n", " "),
+                    "stops": stops,
+                    "num_stops": len(stops),
+                    "city": session.city or "unknown",
+                    "elapsed_s": elapsed,
+                    "score": round(score, 1),
+                    "issues": issues,
+                }
+            )
 
-            prev_keywords = getattr(session, 'keywords', None)
+            prev_keywords = getattr(session, "keywords", None)
 
             status = "✅" if score >= 4 else "⚠️" if score >= 2.5 else "❌"
-            print(f"    {status} R{i+1} [{elapsed:.0f}s] stops={stops[:3]} score={score:.1f}/5")
+            print(f"    {status} R{i + 1} [{elapsed:.0f}s] stops={stops[:3]} score={score:.1f}/5")
             if issues:
                 print(f"         > {'; '.join(issues)}")
         except Exception as e:
             elapsed = round(time.time() - t0, 1)
             results.append({"round": i + 1, "query": query, "error": str(e)[:150], "elapsed_s": elapsed, "score": 0})
-            print(f"    ❌ R{i+1} [{elapsed:.0f}s] ERROR: {e}")
+            print(f"    ❌ R{i + 1} [{elapsed:.0f}s] ERROR: {e}")
 
     avg = round(sum(r["score"] for r in results) / max(len(results), 1), 1)
-    return {"id": uid, "desc": scenario["desc"], "user_id": user_id,
-            "total_rounds": len(results), "total_time_s": round(total_time, 1),
-            "avg_score": avg, "results": results}
+    return {
+        "id": uid,
+        "desc": scenario["desc"],
+        "user_id": user_id,
+        "total_rounds": len(results),
+        "total_time_s": round(total_time, 1),
+        "avg_score": avg,
+        "results": results,
+    }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -122,49 +138,114 @@ def run_scenario(scenario):
 # ═══════════════════════════════════════════════════════════
 
 ROUND_1 = [
-    {"id": "R1_美食猎人", "desc": "品类切换+预算约束", "user_id": "t1_foodie",
-     "rounds": ["从回民街出发找地道小吃", "换成清淡口味不要太油腻", "人均控制在50以内"]},
-    {"id": "R1_文化游客", "desc": "时间收缩+地点跳跃+增量添加", "user_id": "t2_culture",
-     "rounds": ["西安历史古迹一日游，从北站出发", "改成半天，重点去大雁塔", "再加个大唐不夜城看夜景"]},
-    {"id": "R1_亲子周末", "desc": "排除约束+时间控制", "user_id": "t3_family",
-     "rounds": ["带孩子去曲江玩", "要户外公园不要室内商场", "控制在3小时内"]},
-    {"id": "R1_极简社畜", "desc": "极简兜底→具体化", "user_id": "t4_minimal",
-     "rounds": ["西安 吃", "想吃火锅"]},
-    {"id": "R1_骑行探索", "desc": "关键词保留+时间收缩", "user_id": "t5_bike",
-     "rounds": ["从高新出发骑行去秦岭", "缩短到2小时以内", "但是风景一定要好"]},
-    {"id": "R1_佛系游客", "desc": "无目的→加约束", "user_id": "t6_zenn",
-     "rounds": ["周末不知道去哪", "能拍照好看的地方", "不要太远"]},
-    {"id": "R1_深夜觅食", "desc": "深夜→换区", "user_id": "t7_late",
-     "rounds": ["晚上11点还能吃东西的地方", "换到小寨附近找找"]},
-    {"id": "R1_穷游学生", "desc": "穷游→预算升级", "user_id": "t8_budget",
-     "rounds": ["免费景点为主，省钱", "预算宽裕了，人均80吃顿好的"]},
+    {
+        "id": "R1_美食猎人",
+        "desc": "品类切换+预算约束",
+        "user_id": "t1_foodie",
+        "rounds": ["从回民街出发找地道小吃", "换成清淡口味不要太油腻", "人均控制在50以内"],
+    },
+    {
+        "id": "R1_文化游客",
+        "desc": "时间收缩+地点跳跃+增量添加",
+        "user_id": "t2_culture",
+        "rounds": ["西安历史古迹一日游，从北站出发", "改成半天，重点去大雁塔", "再加个大唐不夜城看夜景"],
+    },
+    {
+        "id": "R1_亲子周末",
+        "desc": "排除约束+时间控制",
+        "user_id": "t3_family",
+        "rounds": ["带孩子去曲江玩", "要户外公园不要室内商场", "控制在3小时内"],
+    },
+    {"id": "R1_极简社畜", "desc": "极简兜底→具体化", "user_id": "t4_minimal", "rounds": ["西安 吃", "想吃火锅"]},
+    {
+        "id": "R1_骑行探索",
+        "desc": "关键词保留+时间收缩",
+        "user_id": "t5_bike",
+        "rounds": ["从高新出发骑行去秦岭", "缩短到2小时以内", "但是风景一定要好"],
+    },
+    {
+        "id": "R1_佛系游客",
+        "desc": "无目的→加约束",
+        "user_id": "t6_zenn",
+        "rounds": ["周末不知道去哪", "能拍照好看的地方", "不要太远"],
+    },
+    {
+        "id": "R1_深夜觅食",
+        "desc": "深夜→换区",
+        "user_id": "t7_late",
+        "rounds": ["晚上11点还能吃东西的地方", "换到小寨附近找找"],
+    },
+    {
+        "id": "R1_穷游学生",
+        "desc": "穷游→预算升级",
+        "user_id": "t8_budget",
+        "rounds": ["免费景点为主，省钱", "预算宽裕了，人均80吃顿好的"],
+    },
 ]
 
 ROUND_2_NEW = [
-    {"id": "R2_反复横跳", "desc": "地点来回切换+预算剧烈摇摆", "user_id": "t9_flip",
-     "rounds": ["钟楼附近吃火锅", "不去钟楼了改回民街吧", "算了还是钟楼但要清淡的", "人均30以内"]},
-    {"id": "R2_矛盾体", "desc": "自相矛盾不追问", "user_id": "t10_paradox",
-     "rounds": ["推荐米其林水准但人均预算30块的地方"]},
-    {"id": "R2_自说自话", "desc": "单轮长输入多次改主意", "user_id": "t11_self",
-     "rounds": ["推荐火锅...等等我改主意了要烤肉...不对还是火锅但要便宜的...再加个咖啡店吧"]},
+    {
+        "id": "R2_反复横跳",
+        "desc": "地点来回切换+预算剧烈摇摆",
+        "user_id": "t9_flip",
+        "rounds": ["钟楼附近吃火锅", "不去钟楼了改回民街吧", "算了还是钟楼但要清淡的", "人均30以内"],
+    },
+    {
+        "id": "R2_矛盾体",
+        "desc": "自相矛盾不追问",
+        "user_id": "t10_paradox",
+        "rounds": ["推荐米其林水准但人均预算30块的地方"],
+    },
+    {
+        "id": "R2_自说自话",
+        "desc": "单轮长输入多次改主意",
+        "user_id": "t11_self",
+        "rounds": ["推荐火锅...等等我改主意了要烤肉...不对还是火锅但要便宜的...再加个咖啡店吧"],
+    },
 ]
 
 ROUND_3_NEW = [
-    {"id": "R3_信息轰炸", "desc": "超长输入150字", "user_id": "t12_bomb",
-     "rounds": ["从钟楼出发去大雁塔，想吃火锅但是不要太辣，环境要好适合约会，人均100左右，要有停车位，最好能看到夜景，不要太拥挤的地方，3小时内，走路不要太多"]},
-    {"id": "R3_不存在地名", "desc": "不存在地名→降级", "user_id": "t13_fake",
-     "rounds": ["想去火星基地吃烧烤", "算了那就去最近的地标吧"]},
-    {"id": "R3_纯情绪化", "desc": "纯情绪→逐渐理性", "user_id": "t14_mood",
-     "rounds": ["好无聊啊随便找个地方", "太远了不想动", "算了就附近吧别太贵"]},
+    {
+        "id": "R3_信息轰炸",
+        "desc": "超长输入150字",
+        "user_id": "t12_bomb",
+        "rounds": [
+            "从钟楼出发去大雁塔，想吃火锅但是不要太辣，环境要好适合约会，人均100左右，要有停车位，最好能看到夜景，不要太拥挤的地方，3小时内，走路不要太多"
+        ],
+    },
+    {
+        "id": "R3_不存在地名",
+        "desc": "不存在地名→降级",
+        "user_id": "t13_fake",
+        "rounds": ["想去火星基地吃烧烤", "算了那就去最近的地标吧"],
+    },
+    {
+        "id": "R3_纯情绪化",
+        "desc": "纯情绪→逐渐理性",
+        "user_id": "t14_mood",
+        "rounds": ["好无聊啊随便找个地方", "太远了不想动", "算了就附近吧别太贵"],
+    },
 ]
 
 ROUND_4_NEW = [
-    {"id": "R4_极限反转", "desc": "5轮偏好完全反转", "user_id": "t15_rev",
-     "rounds": ["钟楼附近吃火锅", "改成清淡口味吧", "还是想吃辣的", "改成纯素食", "算了还是吃火锅"]},
-    {"id": "R4_需求漂移", "desc": "完全不同的品类跳跃", "user_id": "t16_drift",
-     "rounds": ["找个安静的咖啡店", "有书店吗", "改成户外徒步吧", "算了还是购物商场"]},
-    {"id": "R4_地名歧义", "desc": "测试geocode兜底", "user_id": "t17_ambig",
-     "rounds": ["去四路吃饭", "不对，是丈八四路"]},
+    {
+        "id": "R4_极限反转",
+        "desc": "5轮偏好完全反转",
+        "user_id": "t15_rev",
+        "rounds": ["钟楼附近吃火锅", "改成清淡口味吧", "还是想吃辣的", "改成纯素食", "算了还是吃火锅"],
+    },
+    {
+        "id": "R4_需求漂移",
+        "desc": "完全不同的品类跳跃",
+        "user_id": "t16_drift",
+        "rounds": ["找个安静的咖啡店", "有书店吗", "改成户外徒步吧", "算了还是购物商场"],
+    },
+    {
+        "id": "R4_地名歧义",
+        "desc": "测试geocode兜底",
+        "user_id": "t17_ambig",
+        "rounds": ["去四路吃饭", "不对，是丈八四路"],
+    },
 ]
 
 ALL_SCENARIOS = ROUND_1 + ROUND_2_NEW + ROUND_3_NEW + ROUND_4_NEW
@@ -174,15 +255,16 @@ ALL_SCENARIOS = ROUND_1 + ROUND_2_NEW + ROUND_3_NEW + ROUND_4_NEW
 # 主流程
 # ═══════════════════════════════════════════════════════════
 
+
 def run_round(round_num, scenarios, all_history):
-    print(f"\n{'═'*60}")
+    print(f"\n{'═' * 60}")
     print(f"  🔵 Round {round_num} — {len(scenarios)} 用户")
-    print(f"{'═'*60}\n")
+    print(f"{'═' * 60}\n")
 
     round_results = []
     for i, sc in enumerate(scenarios):
         uid = sc["id"]
-        print(f"[{i+1}/{len(scenarios)}] {uid}: {sc['desc']}")
+        print(f"[{i + 1}/{len(scenarios)}] {uid}: {sc['desc']}")
         r = run_scenario(sc)
         round_results.append(r)
         status = "✅" if r["avg_score"] >= 4 else "⚠️" if r["avg_score"] >= 3 else "❌"
@@ -199,9 +281,13 @@ def run_round(round_num, scenarios, all_history):
     fail = sum(1 for s in scores if s < 3)
 
     summary = {
-        "round": round_num, "user_count": len(scenarios),
-        "overall_avg": overall, "perfect_users": [p["id"] for p in perfect],
-        "ok": ok, "warn": warn, "fail": fail,
+        "round": round_num,
+        "user_count": len(scenarios),
+        "overall_avg": overall,
+        "perfect_users": [p["id"] for p in perfect],
+        "ok": ok,
+        "warn": warn,
+        "fail": fail,
         "results": round_results,
     }
 
@@ -267,9 +353,9 @@ if __name__ == "__main__":
     perfect1, results1, summary1 = run_round(1, ROUND_1, all_history)
 
     # ══ Fix Round 1 issues ══
-    print(f"\n{'═'*60}")
-    print(f"  🔧 Round 1 问题分析")
-    print(f"{'═'*60}")
+    print(f"\n{'═' * 60}")
+    print("  🔧 Round 1 问题分析")
+    print(f"{'═' * 60}")
     all_issues = []
     for r in results1:
         for rd in r["results"]:
@@ -286,9 +372,9 @@ if __name__ == "__main__":
     # ══ Round 2 ══
     perfect2, results2, summary2 = run_round(2, round2_scenarios, all_history)
 
-    print(f"\n{'═'*60}")
-    print(f"  🔧 Round 2 问题分析")
-    print(f"{'═'*60}")
+    print(f"\n{'═' * 60}")
+    print("  🔧 Round 2 问题分析")
+    print(f"{'═' * 60}")
     all_issues2 = []
     for r in results2:
         for rd in r["results"]:
@@ -305,9 +391,9 @@ if __name__ == "__main__":
     # ══ Round 3 ══
     perfect3, results3, summary3 = run_round(3, round3_scenarios, all_history)
 
-    print(f"\n{'═'*60}")
-    print(f"  🔧 Round 3 问题分析")
-    print(f"{'═'*60}")
+    print(f"\n{'═' * 60}")
+    print("  🔧 Round 3 问题分析")
+    print(f"{'═' * 60}")
     all_issues3 = []
     for r in results3:
         for rd in r["results"]:
@@ -327,18 +413,22 @@ if __name__ == "__main__":
     # ══════════════════════════════════════════════════
     # 最终汇总
     # ══════════════════════════════════════════════════
-    print(f"\n{'═'*60}")
-    print(f"  📊 最终汇总报告")
-    print(f"{'═'*60}\n")
+    print(f"\n{'═' * 60}")
+    print("  📊 最终汇总报告")
+    print(f"{'═' * 60}\n")
 
     for s in all_history:
         rn = s["round"]
-        print(f"  Round {rn}: 均分 {s['overall_avg']:.1f}/5 | ✅{s['ok']} ⚠️{s['warn']} ❌{s['fail']} | 淘汰: {s['perfect_users']}")
+        print(
+            f"  Round {rn}: 均分 {s['overall_avg']:.1f}/5 | ✅{s['ok']} ⚠️{s['warn']} ❌{s['fail']} | 淘汰: {s['perfect_users']}"
+        )
 
     all_scores = [s["overall_avg"] for s in all_history]
-    print(f"\n  4轮总均分: {round(sum(all_scores)/4, 1)}/5")
+    print(f"\n  4轮总均分: {round(sum(all_scores) / 4, 1)}/5")
 
     final_path = OUTPUT_DIR / "test_final_summary.json"
     with open(final_path, "w", encoding="utf-8") as f:
-        json.dump({"rounds": all_history, "overall_avg": round(sum(all_scores)/4, 1)}, f, ensure_ascii=False, indent=2)
+        json.dump(
+            {"rounds": all_history, "overall_avg": round(sum(all_scores) / 4, 1)}, f, ensure_ascii=False, indent=2
+        )
     print(f"\n📄 最终报告: {final_path}")

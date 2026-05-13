@@ -8,9 +8,9 @@
 from app.shared.utils import AgentSession
 
 
-def run_multi_agent(user_input: str, session: AgentSession = None,
-                    user_id: str = "default",
-                    progress_callback=None) -> tuple:
+def run_multi_agent(
+    user_input: str, session: AgentSession = None, user_id: str = "default", progress_callback=None
+) -> tuple:
     """统一路线规划入口，支持多轮对话.
 
     Args:
@@ -26,5 +26,5 @@ def run_multi_agent(user_input: str, session: AgentSession = None,
         session = AgentSession()
 
     from app.core.route_agent import run_unified_agent
-    return run_unified_agent(user_input, session, user_id,
-                             progress_callback=progress_callback)
+
+    return run_unified_agent(user_input, session, user_id, progress_callback=progress_callback)

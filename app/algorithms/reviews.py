@@ -1,5 +1,7 @@
 import json
+
 import requests
+
 from app.config import AMAP_API_KEY
 
 TOOL_DEFINITION = {

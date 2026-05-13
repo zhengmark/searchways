@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from typing import Optional
 
 
 class POI(BaseModel):
@@ -8,16 +7,16 @@ class POI(BaseModel):
     category: str
     lat: float
     lng: float
-    rating: Optional[float] = None
-    price_per_person: Optional[int] = None
-    review_summary: Optional[str] = None
+    rating: float | None = None
+    price_per_person: int | None = None
+    review_summary: str | None = None
 
 
 class RouteStop(BaseModel):
     order: int
     poi: POI
-    arrival_time: Optional[str] = None
-    duration_minutes: Optional[int] = None
+    arrival_time: str | None = None
+    duration_minutes: int | None = None
     notes: str = ""
 
 
@@ -31,19 +30,21 @@ class Route(BaseModel):
 
 class UserIntent(BaseModel):
     origin: str
-    destination: Optional[str] = None
-    date: Optional[str] = None
-    time_budget_hours: Optional[float] = None
-    group_type: Optional[str] = None  # solo / couple / family / friends
+    destination: str | None = None
+    date: str | None = None
+    time_budget_hours: float | None = None
+    group_type: str | None = None  # solo / couple / family / friends
     preferences: list[str] = []
-    budget_per_person: Optional[int] = None
+    budget_per_person: int | None = None
     raw_input: str
 
 
 # ── Phase 2-4: 交互式路线编辑模型 ──────────────────
 
+
 class CorridorPoi(BaseModel):
     """走廊候选 POI"""
+
     id: str
     name: str
     lat: float

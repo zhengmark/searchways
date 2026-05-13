@@ -2,7 +2,8 @@
 高德地图 POI 搜索测试
 用法: python test_amap.py
 """
-from app.providers.amap_provider import search_poi, AmapAPIError
+
+from app.providers.amap_provider import AmapAPIError, search_poi
 
 
 def main():
@@ -38,6 +39,7 @@ def main():
     # 测试 3: 无效 Key
     print(">>> 测试 3：验证配置")
     from app.config import AMAP_API_KEY
+
     if AMAP_API_KEY and AMAP_API_KEY != "your-amap-key-here":
         print("  ✅ AMAP_API_KEY 已配置")
     else:

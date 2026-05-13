@@ -1,7 +1,10 @@
 """10 用户多轮对话测试 — 调真实 API，评分."""
-import json, time, sys, os
-sys.path.insert(0, '.')
-from concurrent.futures import ThreadPoolExecutor
+
+import json
+import sys
+import time
+
+sys.path.insert(0, ".")
 from app.core.orchestrator import run_multi_agent
 
 TESTS = [
@@ -89,6 +92,7 @@ TESTS = [
     },
 ]
 
+
 def run_one_test(test):
     """运行一个用户的所有对话轮次，返回结果."""
     uid = test["id"]
@@ -108,27 +112,31 @@ def run_one_test(test):
             stops = session.stop_names or []
             score = _rate(uid, i, query, narration, stops, session)
 
-            results.append({
-                "round": i + 1,
-                "query": query,
-                "narration_preview": narration[:200].replace("\n", " "),
-                "stops": stops,
-                "num_stops": len(stops),
-                "city": session.city or "unknown",
-                "elapsed_s": elapsed,
-                "score": score,
-            })
-            print(f"  [{uid}] R{i+1} ✅ {elapsed}s stops={stops} score={score}")
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "narration_preview": narration[:200].replace("\n", " "),
+                    "stops": stops,
+                    "num_stops": len(stops),
+                    "city": session.city or "unknown",
+                    "elapsed_s": elapsed,
+                    "score": score,
+                }
+            )
+            print(f"  [{uid}] R{i + 1} ✅ {elapsed}s stops={stops} score={score}")
         except Exception as e:
             elapsed = round(time.time() - t0, 1)
-            results.append({
-                "round": i + 1,
-                "query": query,
-                "error": str(e),
-                "elapsed_s": elapsed,
-                "score": 0,
-            })
-            print(f"  [{uid}] R{i+1} ❌ {elapsed}s error={e}")
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "error": str(e),
+                    "elapsed_s": elapsed,
+                    "score": 0,
+                }
+            )
+            print(f"  [{uid}] R{i + 1} ❌ {elapsed}s error={e}")
             break
 
     return {
@@ -169,7 +177,7 @@ def _rate(test_id, round_i, query, narration, stops, session):
     # 4. 多样性 — 品类不重复 (0-1)
     if len(stops) >= 2:
         categories = set()
-        for p in (session.all_pois or []):
+        for p in session.all_pois or []:
             cat = p.get("category", "")
             if cat:
                 categories.add(cat)
@@ -227,10 +235,9 @@ if __name__ == "__main__":
             if err:
                 print(f"  {r['id']} R{rd['round']}: ❌ {err}")
             else:
-                print(f"  {r['id']} R{rd['round']}: score={rd['score']}/5 "
-                      f"stops={rd['num_stops']} \"{rd['query'][:50]}\"")
+                print(f'  {r["id"]} R{rd["round"]}: score={rd["score"]}/5 stops={rd["num_stops"]} "{rd["query"][:50]}"')
 
     # 保存 JSON
     with open("data/output/test_10users.json", "w") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-    print(f"\n📄 详细结果: data/output/test_10users.json")
+    print("\n📄 详细结果: data/output/test_10users.json")

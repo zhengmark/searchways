@@ -22,10 +22,22 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 target-version = "py310"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = [
+    "B008",   # FastAPI Depends in defaults is idiomatic
+    "N806",   # uppercase constants in functions are intentional
+    "B904",   # raise...from in except blocks — nice-to-have, not critical
+    "B905",   # zip() strict parameter — minor
+    "C401",   # unnecessary generator — minor style preference
+    "E501",   # line length — docstrings and test data often exceed 120
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E701", "F841"]  # test files: single-line conditionals OK, unused vars for debugging OK
+"app/core/constraint_model.py" = ["E701"]  # intentional compact style
 
 [tool.ruff.format]
 quote-style = "double"

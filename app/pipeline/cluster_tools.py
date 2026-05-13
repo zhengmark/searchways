@@ -7,12 +7,10 @@
 """
 
 import json
-import math
 import time
-from functools import lru_cache
 
-from app.providers.amap_provider import robust_geocode, AmapAPIError
 from app.algorithms.graph_planner import build_graph, pre_prune_pois, shortest_path
+from app.providers.amap_provider import AmapAPIError, robust_geocode
 from db.cluster import query_corridor_clusters
 from db.connection import get_conn
 from db.repository import _row_to_dict
@@ -26,18 +24,14 @@ _KEYWORD_CATEGORY_MAP = {
     # 美食类
     "美食": ["餐饮", "火锅", "烧烤", "小吃", "甜品", "咖啡", "茶馆", "西餐", "日料", "海鲜", "面馆"],
     "火锅": ["火锅", "餐饮"],
-    "烧烤": ["烧烤", "餐饮"],
     "咖啡": ["咖啡", "茶馆"],
-    "甜品": ["甜品", "咖啡"],
     "小吃": ["小吃", "餐饮"],
     "清淡": ["素菜", "茶艺", "咖啡", "小吃", "面馆", "简餐", "粤菜"],
     "养生": ["茶馆", "咖啡", "小吃"],
-    "宵夜": ["火锅", "烧烤", "小吃", "餐饮"],
     "面食": ["面馆", "小吃", "餐饮"],
     "面馆": ["面馆", "小吃", "餐饮"],
     "酒吧": ["酒吧", "餐饮"],
     "夜宵": ["火锅", "烧烤", "小吃", "餐饮", "酒吧"],
-    "深夜": ["火锅", "烧烤", "小吃", "酒吧"],
     # 细分品类
     "轻食": ["轻食", "沙拉", "简餐", "餐饮", "咖啡"],
     "沙拉": ["餐饮", "咖啡"],
@@ -110,13 +104,25 @@ _KEYWORD_CATEGORY_MAP = {
 
 # POI 名称黑名单关键词 — 包含这些词的簇相关性降权
 _POI_NAME_BLACKLIST = [
-    "KTV", "ktv", "Ktv", "纯K", "K ",
-    "棋牌", "麻将",
-    "商务会所", "洗浴", "足浴",
-    "手机", "专卖店", "小米之家",
-    "舞厅", "歌厅",
-    "中介", "房产",
-    "Party.K", "party.k",
+    "KTV",
+    "ktv",
+    "Ktv",
+    "纯K",
+    "K ",
+    "棋牌",
+    "麻将",
+    "商务会所",
+    "洗浴",
+    "足浴",
+    "手机",
+    "专卖店",
+    "小米之家",
+    "舞厅",
+    "歌厅",
+    "中介",
+    "房产",
+    "Party.K",
+    "party.k",
 ]
 
 
@@ -258,6 +264,7 @@ TOOL_DEFINITIONS = [
 
 # ── 工具实现 ───────────────────────────────────────────
 
+
 def tool_geocode(place: str, city: str) -> dict:
     """geocode 工具实现."""
     try:
@@ -274,10 +281,15 @@ def tool_geocode(place: str, city: str) -> dict:
         return {"success": False, "error": f"地理编码服务暂不可用，请稍后重试'{place}'"}
 
 
-def tool_query_clusters(origin_lat: float, origin_lng: float,
-                        dest_lat: float = None, dest_lng: float = None,
-                        keywords: list = None, budget: str = None,
-                        city: str = None) -> dict:
+def tool_query_clusters(
+    origin_lat: float,
+    origin_lng: float,
+    dest_lat: float = None,
+    dest_lng: float = None,
+    keywords: list = None,
+    budget: str = None,
+    city: str = None,
+) -> dict:
     """query_clusters 工具实现."""
     # Expand keywords to avoid LLM retries
     if keywords:
@@ -298,11 +310,14 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
                     if ek not in expanded:
                         expanded.append(ek)
         keywords = expanded[:8]  # cap at 8
-    
+
     clusters = query_corridor_clusters(
-        origin_lat, origin_lng,
-        dest_lat=dest_lat, dest_lng=dest_lng,
-        keywords=keywords, budget=budget,
+        origin_lat,
+        origin_lng,
+        dest_lat=dest_lat,
+        dest_lng=dest_lng,
+        keywords=keywords,
+        budget=budget,
     )
     # 计算相关性并排序（垂距惩罚：离路线越远分越低）
     kws = keywords or []
@@ -318,19 +333,21 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
     summary = []
     for c in clusters:
         perp = c.get("perp_dist_km", 0)
-        summary.append({
-            "cluster_id": c["cluster_id"],
-            "name": c["name"],
-            "dist_from_origin_km": c["dist_from_origin_km"],
-            "projection": c.get("projection", 0),
-            "poi_count": c["poi_count"],
-            "top_cats": c["top_cats"],
-            "avg_rating": c["avg_rating"],
-            "avg_price": c["avg_price"],
-            "top_poi_names": c["top_poi_names"][:3],
-            "keyword_match": round(c["_relevance"], 1),
-            "off_route_km": round(perp, 1),  # how far off the route centerline
-        })
+        summary.append(
+            {
+                "cluster_id": c["cluster_id"],
+                "name": c["name"],
+                "dist_from_origin_km": c["dist_from_origin_km"],
+                "projection": c.get("projection", 0),
+                "poi_count": c["poi_count"],
+                "top_cats": c["top_cats"],
+                "avg_rating": c["avg_rating"],
+                "avg_price": c["avg_price"],
+                "top_poi_names": c["top_poi_names"][:3],
+                "keyword_match": round(c["_relevance"], 1),
+                "off_route_km": round(perp, 1),  # how far off the route centerline
+            }
+        )
     # 筛掉完全无关的簇（match=0），保留至少 5 个
     relevant = [s for s in summary if s["keyword_match"] > 0]
     if len(relevant) >= 3:
@@ -338,9 +355,23 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
 
     # 高德 API 补搜：仅本地 DB 结果严重不足时触发
     # 特殊品类（DB 覆盖弱）不再强制补搜——让 LLM 先看 DB 结果，不满意再自己换关键词
-    _SPECIAL_FALLBACK_KW = {"轻食", "沙拉", "健康餐", "素食", "有机", "健身房", "运动健身",
-                            "包间", "商务宴请", "按摩", "SPA", "高蛋白", "低碳水", "无糖"}
-    has_special = bool(set(kw.lower() for kw in kws) & _SPECIAL_FALLBACK_KW)
+    _SPECIAL_FALLBACK_KW = {
+        "轻食",
+        "沙拉",
+        "健康餐",
+        "素食",
+        "有机",
+        "健身房",
+        "运动健身",
+        "包间",
+        "商务宴请",
+        "按摩",
+        "SPA",
+        "高蛋白",
+        "低碳水",
+        "无糖",
+    }
+    _has_special = bool(set(kw.lower() for kw in kws) & _SPECIAL_FALLBACK_KW)
 
     low_match = [s for s in summary if s["keyword_match"] < 0.5]
     # 只有 DB 结果真的少（<3个相关簇）或全不匹配时才补搜。特殊品类不再强制。
@@ -348,45 +379,53 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
     if need_fallback:
         amap_pois = _amap_fallback_search(origin_lat, origin_lng, kws, dest_lat, dest_lng, city=city or "西安")
         if amap_pois:
-            summary.append({
-                "cluster_id": -1,
-                "name": "高德补搜结果",
-                "dist_from_origin_km": 0,
-                "poi_count": len(amap_pois),
-                "top_cats": list(set(p.get("category", "") for p in amap_pois[:10])),
-                "avg_rating": round(sum(p.get("rating", 0) or 0 for p in amap_pois)/max(len(amap_pois),1), 1),
-                "avg_price": round(sum(p.get("price_per_person", 0) or 0 for p in amap_pois)/max(len(amap_pois),1)),
-                "top_poi_names": [p.get("name","") for p in amap_pois[:5]],
-                "keyword_match": 0.5,
-                "source": "amap",
-            })
+            summary.append(
+                {
+                    "cluster_id": -1,
+                    "name": "高德补搜结果",
+                    "dist_from_origin_km": 0,
+                    "poi_count": len(amap_pois),
+                    "top_cats": list(set(p.get("category", "") for p in amap_pois[:10])),
+                    "avg_rating": round(sum(p.get("rating", 0) or 0 for p in amap_pois) / max(len(amap_pois), 1), 1),
+                    "avg_price": round(
+                        sum(p.get("price_per_person", 0) or 0 for p in amap_pois) / max(len(amap_pois), 1)
+                    ),
+                    "top_poi_names": [p.get("name", "") for p in amap_pois[:5]],
+                    "keyword_match": 0.5,
+                    "source": "amap",
+                }
+            )
 
     # ── 热门景点发现：模糊/通用查询时注入城市热门景点 ──
     _GENERIC_KW = {"美食", "景点", "好玩", "逛逛", "推荐", "打卡", "好吃", "转", "玩"}
-    _is_generic = len(kws) <= 2 and all(
-        any(g in kw for g in _GENERIC_KW) for kw in kws
-    )
+    _is_generic = len(kws) <= 2 and all(any(g in kw for g in _GENERIC_KW) for kw in kws)
     if _is_generic or len(summary) < 4:
         city_for_search = city or "西安"
         famous_pois = []
         # 1) 本地精选列表（零 API 调用，毫秒级）
         from app.shared.constants import FAMOUS_ATTRACTIONS
+
         curated = FAMOUS_ATTRACTIONS.get(city_for_search, [])
         if curated:
             for att in curated:
                 gc = _cached_geocode(att["name"], city_for_search)
                 if gc:
-                    famous_pois.append({
-                        "name": att["name"],
-                        "category": att.get("category", "景点"),
-                        "lat": gc["lat"], "lng": gc["lng"],
-                        "rating": None, "price_per_person": None,
-                        "address": "",
-                    })
+                    famous_pois.append(
+                        {
+                            "name": att["name"],
+                            "category": att.get("category", "景点"),
+                            "lat": gc["lat"],
+                            "lng": gc["lng"],
+                            "rating": None,
+                            "price_per_person": None,
+                            "address": "",
+                        }
+                    )
         # 2) 本地列表无此城市 → 高德 API 兜底
         if not curated:
             try:
                 from app.providers.amap_provider import search_top_attractions
+
                 loc = f"{origin_lng},{origin_lat}" if origin_lng and origin_lat else None
                 famous_pois = search_top_attractions(city_for_search, location=loc, limit=8)
             except Exception:
@@ -395,18 +434,23 @@ def tool_query_clusters(origin_lat: float, origin_lng: float,
         if len(famous_pois) < 3 and curated:
             pass  # already done above
         if famous_pois:
-            summary.insert(0, {
-                "cluster_id": -2,
-                "name": f"{city_for_search}热门景点推荐",
-                "dist_from_origin_km": 0,
-                "poi_count": len(famous_pois),
-                "top_cats": list(set(p.get("category", "景点") for p in famous_pois[:5])),
-                "avg_rating": round(sum(p.get("rating", 0) or 0 for p in famous_pois) / max(len(famous_pois), 1), 1),
-                "avg_price": 0,
-                "top_poi_names": [p.get("name", "") for p in famous_pois[:5]],
-                "keyword_match": 0.85,
-                "source": "famous",
-            })
+            summary.insert(
+                0,
+                {
+                    "cluster_id": -2,
+                    "name": f"{city_for_search}热门景点推荐",
+                    "dist_from_origin_km": 0,
+                    "poi_count": len(famous_pois),
+                    "top_cats": list(set(p.get("category", "景点") for p in famous_pois[:5])),
+                    "avg_rating": round(
+                        sum(p.get("rating", 0) or 0 for p in famous_pois) / max(len(famous_pois), 1), 1
+                    ),
+                    "avg_price": 0,
+                    "top_poi_names": [p.get("name", "") for p in famous_pois[:5]],
+                    "keyword_match": 0.85,
+                    "source": "famous",
+                },
+            )
             # 缓存供 build_route 使用
             cache_key = f"famous_{city_for_search}"
             _AMAP_FALLBACK_CACHE[cache_key] = famous_pois
@@ -420,36 +464,52 @@ _AMAP_FALLBACK_CACHE = {}  # session_id → [poi_dicts]
 
 # 特殊关键词 → 高德 API 友好搜索词
 _AMAP_KW_MAP = {
-    "轻食": "轻食沙拉", "沙拉": "沙拉", "健康餐": "轻食",
-    "素食": "素食餐厅", "有机": "有机餐厅",
-    "高蛋白": "轻食沙拉", "低碳水": "轻食", "无糖": "咖啡甜品",
-    "健身房": "健身房", "健身": "健身房", "运动": "运动健身",
-    "包间": "中餐包间", "商务": "高档中餐", "宴请": "高档餐厅",
-    "客户": "商务餐厅", "高档": "高档餐厅",
-    "按摩": "按摩", "SPA": "SPA",
-    "喝茶": "茶馆", "下棋": "茶馆棋牌", "棋牌": "棋牌",
+    "轻食": "轻食沙拉",
+    "沙拉": "沙拉",
+    "健康餐": "轻食",
+    "素食": "素食餐厅",
+    "有机": "有机餐厅",
+    "高蛋白": "轻食沙拉",
+    "低碳水": "轻食",
+    "无糖": "咖啡甜品",
+    "健身房": "健身房",
+    "健身": "健身房",
+    "运动": "运动健身",
+    "包间": "中餐包间",
+    "商务": "高档中餐",
+    "宴请": "高档餐厅",
+    "客户": "商务餐厅",
+    "高档": "高档餐厅",
+    "按摩": "按摩",
+    "SPA": "SPA",
+    "喝茶": "茶馆",
+    "下棋": "茶馆棋牌",
+    "棋牌": "棋牌",
 }
 
 
 # geocode 结果缓存（避免对同一城市反复调用）
 _GEOCODE_CACHE = {}
 
+
 def _cached_geocode(name: str, city: str) -> dict:
     key = f"{city}:{name}"
     if key not in _GEOCODE_CACHE:
         from app.providers.amap_provider import geocode
+
         try:
             _GEOCODE_CACHE[key] = geocode(name, city)
         except Exception:
             _GEOCODE_CACHE[key] = None
     return _GEOCODE_CACHE[key]
 
+
 def _amap_fallback_search(origin_lat, origin_lng, keywords, dest_lat=None, dest_lng=None, city="西安"):
     """高德 API 补搜 — 本地 DB 无结果时兜底."""
     try:
-        from app.providers.amap_provider import search_poi
-        from app.algorithms.poi_filter import dedup_pois, filter_by_category
         from app.algorithms.geo import haversine
+        from app.algorithms.poi_filter import dedup_pois, filter_by_category
+        from app.providers.amap_provider import search_poi
 
         all_pois = []
         # 将特殊关键词映射为高德 API 友好搜索词
@@ -465,9 +525,7 @@ def _amap_fallback_search(origin_lat, origin_lng, keywords, dest_lat=None, dest_
 
         for kw in search_kws:
             try:
-                pois = search_poi(keywords=kw, city=city,
-                                  location=f"{origin_lng},{origin_lat}",
-                                  radius=5000, offset=10)
+                pois = search_poi(keywords=kw, city=city, location=f"{origin_lng},{origin_lat}", radius=5000, offset=10)
                 all_pois.extend(pois)
             except Exception:
                 continue
@@ -509,17 +567,21 @@ def _load_amap_pois(origin_coords, city=""):
         famous_id = f"famous_{city}"
         famous_pois = _AMAP_FALLBACK_CACHE.get(famous_id, [])
         # 去重
-        seen = {p.get("name","") for p in pois}
+        seen = {p.get("name", "") for p in pois}
         for p in famous_pois:
-            if p.get("name","") not in seen:
+            if p.get("name", "") not in seen:
                 pois.append(p)
     return pois
 
 
-def tool_build_route(cluster_ids: list, num_stops: int,
-                     origin_coords: tuple, dest_coords: tuple = None,
-                     dest_name: str = "",
-                     amap_pois: list = None) -> dict:
+def tool_build_route(
+    cluster_ids: list,
+    num_stops: int,
+    origin_coords: tuple,
+    dest_coords: tuple = None,
+    dest_name: str = "",
+    amap_pois: list = None,
+) -> dict:
     """build_route 工具实现.
 
     Args:
@@ -552,17 +614,21 @@ def tool_build_route(cluster_ids: list, num_stops: int,
     if db_cluster_ids:
         with get_conn() as conn:
             placeholders = ",".join("?" * len(db_cluster_ids))
-            rows = conn.execute(f"""
+            rows = conn.execute(
+                f"""
                 SELECT * FROM pois
                 WHERE cluster_id IN ({placeholders})
                   AND lat IS NOT NULL
                 ORDER BY rating DESC NULLS LAST
                 LIMIT 100
-            """, db_cluster_ids).fetchall()
+            """,
+                db_cluster_ids,
+            ).fetchall()
         pois.extend([_row_to_dict(r) for r in rows])
 
     # Validate coordinates — filter out POIs with missing/invalid lat/lng
     from app.algorithms.graph_planner import _validate_poi_coords
+
     valid_pois = [p for p in pois if _validate_poi_coords(p)]
     if valid_pois:
         pois = valid_pois
@@ -575,6 +641,7 @@ def tool_build_route(cluster_ids: list, num_stops: int,
 
     # 品类过滤：移除 KTV/棋牌/打印店等黑名单 POI
     from app.algorithms.poi_filter import filter_by_category as _filter_cat
+
     pois = _filter_cat(pois)
 
     if not pois:
@@ -606,34 +673,38 @@ def tool_build_route(cluster_ids: list, num_stops: int,
             # Include destination as a stop
             display_name = dest_name or "终点"
             stop_names.append(display_name)
-            stop_details.append({
-                "name": display_name,
-                "lat": dest_coords[0] if dest_coords else None,
-                "lng": dest_coords[1] if dest_coords else None,
-                "category": "",
-                "rating": None,
-                "price_per_person": None,
-                "address": "",
-                "transport_from_prev": seg["transport"],
-                "duration_min": round(seg["duration"] / 60),
-                "distance_m": seg["distance"],
-            })
+            stop_details.append(
+                {
+                    "name": display_name,
+                    "lat": dest_coords[0] if dest_coords else None,
+                    "lng": dest_coords[1] if dest_coords else None,
+                    "category": "",
+                    "rating": None,
+                    "price_per_person": None,
+                    "address": "",
+                    "transport_from_prev": seg["transport"],
+                    "duration_min": round(seg["duration"] / 60),
+                    "distance_m": seg["distance"],
+                }
+            )
         else:
             # 查找 POI 详情
             poi_info = next((p for p in pois if p["name"] == to_name), None)
             stop_names.append(to_name)
-            stop_details.append({
-                "name": to_name,
-                "lat": poi_info.get("lat") if poi_info else None,
-                "lng": poi_info.get("lng") if poi_info else None,
-                "category": poi_info.get("category", "") if poi_info else "",
-                "rating": poi_info.get("rating") if poi_info else None,
-                "price_per_person": poi_info.get("price_per_person") if poi_info else None,
-                "address": poi_info.get("address", "") if poi_info else "",
-                "transport_from_prev": seg["transport"],
-                "duration_min": round(seg["duration"] / 60),
-                "distance_m": seg["distance"],
-            })
+            stop_details.append(
+                {
+                    "name": to_name,
+                    "lat": poi_info.get("lat") if poi_info else None,
+                    "lng": poi_info.get("lng") if poi_info else None,
+                    "category": poi_info.get("category", "") if poi_info else "",
+                    "rating": poi_info.get("rating") if poi_info else None,
+                    "price_per_person": poi_info.get("price_per_person") if poi_info else None,
+                    "address": poi_info.get("address", "") if poi_info else "",
+                    "transport_from_prev": seg["transport"],
+                    "duration_min": round(seg["duration"] / 60),
+                    "distance_m": seg["distance"],
+                }
+            )
 
     return {
         "success": True,
@@ -646,19 +717,19 @@ def tool_build_route(cluster_ids: list, num_stops: int,
 
 # ── 工具调度 ───────────────────────────────────────────
 
+
 def execute_tool(tool_name: str, tool_input: dict, agent_state: dict) -> str:
     """Execute tool call with defensive try/except wrapper."""
     try:
         return _execute_tool_impl(tool_name, tool_input, agent_state)
     except Exception as e:
         import traceback
+
         error_msg = f"{type(e).__name__}: {str(e)[:200]}"
         traceback.print_exc()
-        return json.dumps({
-            "success": False,
-            "error": f"工具执行异常: {error_msg}",
-            "recoverable": True
-        }, ensure_ascii=False)
+        return json.dumps(
+            {"success": False, "error": f"工具执行异常: {error_msg}", "recoverable": True}, ensure_ascii=False
+        )
 
 
 def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> str:
@@ -705,7 +776,7 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
     if tool_name == "geocode":
         city = tool_input.get("city", agent_state.get("city", "西安"))
         places = tool_input.get("places")
-        
+
         if places:
             # Batch mode: parse multiple places in one call
             results = []
@@ -714,21 +785,37 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
                 role = p.get("role", "origin" if i == 0 else "dest")
                 r = tool_geocode(place=place_name, city=city)
                 results.append({**r, "role": role})
-                
+
                 if r.get("success"):
                     place = r.get("place", "")
-                    _CITY_NAMES = {"西安","北京","上海","成都","杭州","深圳","广州","南京","武汉","重庆","天津","长沙"}
-                    is_city_only = place.rstrip("市") in _CITY_NAMES and agent_state.get("city","") == ""
+                    _CITY_NAMES = {
+                        "西安",
+                        "北京",
+                        "上海",
+                        "成都",
+                        "杭州",
+                        "深圳",
+                        "广州",
+                        "南京",
+                        "武汉",
+                        "重庆",
+                        "天津",
+                        "长沙",
+                    }
+                    is_city_only = place.rstrip("市") in _CITY_NAMES and agent_state.get("city", "") == ""
                     if role == "origin" and agent_state.get("origin_coords") is None and not is_city_only:
                         agent_state["origin_coords"] = (r["lat"], r["lng"])
                         agent_state["start_name"] = r["place"]
-                    elif (role == "dest" or (agent_state.get("origin_coords") is not None and agent_state.get("dest_coords") is None)) and not is_city_only:
+                    elif (
+                        role == "dest"
+                        or (agent_state.get("origin_coords") is not None and agent_state.get("dest_coords") is None)
+                    ) and not is_city_only:
                         agent_state["dest_coords"] = (r["lat"], r["lng"])
                         agent_state["dest_name"] = r["place"]
-            
+
             if city and not agent_state.get("city"):
                 agent_state["city"] = city.rstrip("市")
-            
+
             result = {"success": True, "results": results}
         else:
             # Single mode (backward compatible)
@@ -739,8 +826,21 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
             if result.get("success"):
                 place = result.get("place", "")
                 # 常见城市名（2-3字纯城市名）→ 只设city，不自动当起终点
-                _CITY_NAMES = {"西安","北京","上海","成都","杭州","深圳","广州","南京","武汉","重庆","天津","长沙"}
-                is_city_only = place.rstrip("市") in _CITY_NAMES and agent_state.get("city","") == ""
+                _CITY_NAMES = {
+                    "西安",
+                    "北京",
+                    "上海",
+                    "成都",
+                    "杭州",
+                    "深圳",
+                    "广州",
+                    "南京",
+                    "武汉",
+                    "重庆",
+                    "天津",
+                    "长沙",
+                }
+                is_city_only = place.rstrip("市") in _CITY_NAMES and agent_state.get("city", "") == ""
                 if not is_city_only:
                     if agent_state.get("origin_coords") is None:
                         agent_state["origin_coords"] = (result["lat"], result["lng"])
@@ -760,20 +860,24 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
         budget = tool_input.get("budget")
         if budget:
             agent_state["last_budget"] = budget
-        
+
         # Propagate constraints to agent_state
         if not agent_state.get("constraints") and agent_state.get("_enriched"):
             try:
                 from app.core.constraint_model import RouteConstraints
+
                 c = RouteConstraints()
                 enriched = agent_state["_enriched"]
-                if enriched.budget_hint: c.budget = enriched.budget_hint
-                if enriched.exclusions: c.exclusions = enriched.exclusions
-                if enriched.keywords: c.preferred_categories = enriched.keywords
+                if enriched.budget_hint:
+                    c.budget = enriched.budget_hint
+                if enriched.exclusions:
+                    c.exclusions = enriched.exclusions
+                if enriched.keywords:
+                    c.preferred_categories = enriched.keywords
                 agent_state["constraints"] = c
             except ImportError:
                 pass
-        
+
         result = tool_query_clusters(
             origin_lat=tool_input.get("origin_lat", default_origin[0]),
             origin_lng=tool_input.get("origin_lng", default_origin[1]),
@@ -795,8 +899,7 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
     elif tool_name == "build_route":
         origin_coords = agent_state.get("origin_coords")
         if not origin_coords:
-            return json.dumps({"success": False, "error": "缺少起点坐标，请先调用 geocode"},
-                              ensure_ascii=False)
+            return json.dumps({"success": False, "error": "缺少起点坐标，请先调用 geocode"}, ensure_ascii=False)
         # 加载高德补搜 POI（如果有）
         amap_pois = []
         if -1 in tool_input.get("cluster_ids", []) or -2 in tool_input.get("cluster_ids", []):
@@ -828,28 +931,34 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
 
             # ── 构建走廊数据（供前端交互式编辑用）──
             # 用全部 corridor 簇（不只是 LLM 选的），确保推荐 POI 覆盖全路线
-            all_cluster_ids = agent_state.get("all_corridor_cluster_ids",
-                                tool_input.get("cluster_ids", []))
+            all_cluster_ids = agent_state.get("all_corridor_cluster_ids", tool_input.get("cluster_ids", []))
             keywords = agent_state.get("last_keywords", [])
             budget = agent_state.get("last_budget", "")
             dest_coords = agent_state.get("dest_coords")
             try:
                 from app.pipeline.corridor_engine import build_corridor
+
                 corridor_data = build_corridor(
-                    origin_coords, dest_coords, all_cluster_ids,
-                    keywords=keywords, budget=budget,
+                    origin_coords,
+                    dest_coords,
+                    all_cluster_ids,
+                    keywords=keywords,
+                    budget=budget,
                 )
                 agent_state["corridor_data"] = corridor_data
             except Exception:
                 agent_state["corridor_data"] = {
-                    "corridor_pois": [], "cluster_markers": [], "corridor_shape": [],
+                    "corridor_pois": [],
+                    "cluster_markers": [],
+                    "corridor_shape": [],
                 }
 
     result_json = json.dumps(result, ensure_ascii=False, default=str)
 
     # 成功的 build_route 或 query_clusters 结果写入去重缓存
-    if (tool_name == "build_route" and result.get("success")) or \
-       (tool_name == "query_clusters" and result.get("success")):
+    if (tool_name == "build_route" and result.get("success")) or (
+        tool_name == "query_clusters" and result.get("success")
+    ):
         _DEDUP_CACHE[cache_key] = (time.time(), result_json)
 
     return result_json

@@ -1,6 +1,10 @@
 """朋友推荐 — 10 个多样化用户画像 + 组团场景测试."""
-import json, time, sys
-sys.path.insert(0, '.')
+
+import json
+import sys
+import time
+
+sys.path.insert(0, ".")
 from app.core.orchestrator import run_multi_agent
 
 # ── 10 个用户画像 ───────────────────────────────
@@ -139,6 +143,7 @@ GROUP_TESTS = [
     },
 ]
 
+
 def run_one_test(test):
     uid = test["id"]
     user_id = test["user_id"]
@@ -158,53 +163,70 @@ def run_one_test(test):
 
             score, issues = _rate_persona(query, narration, stops, session, elapsed, constraint_violations)
 
-            results.append({
-                "round": i + 1, "query": query[:100],
-                "stops": stops, "num_stops": len(stops),
-                "elapsed_s": elapsed, "score": score,
-                "constraints_found": constraints,
-                "violations": constraint_violations,
-                "issues": issues,
-                "narration_preview": narration[:150].replace("\n", " "),
-            })
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query[:100],
+                    "stops": stops,
+                    "num_stops": len(stops),
+                    "elapsed_s": elapsed,
+                    "score": score,
+                    "constraints_found": constraints,
+                    "violations": constraint_violations,
+                    "issues": issues,
+                    "narration_preview": narration[:150].replace("\n", " "),
+                }
+            )
             status = "✅" if not constraint_violations else "⚠️" if len(constraint_violations) <= 2 else "❌"
-            print(f"  {status} R{i+1} {elapsed}s {constraints} → stops={stops[:2]} viol={constraint_violations} score={score}")
+            print(
+                f"  {status} R{i + 1} {elapsed}s {constraints} → stops={stops[:2]} viol={constraint_violations} score={score}"
+            )
         except Exception as e:
-            results.append({"round": i + 1, "query": query[:100], "error": str(e)[:80], "elapsed_s": round(time.time()-t0,1), "score": 0})
-            print(f"  ❌ R{i+1} ERROR: {e}")
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query[:100],
+                    "error": str(e)[:80],
+                    "elapsed_s": round(time.time() - t0, 1),
+                    "score": 0,
+                }
+            )
+            print(f"  ❌ R{i + 1} ERROR: {e}")
 
-    avg = round(sum(r["score"] for r in results)/max(len(results),1), 1)
-    total_viol = sum(len(r.get("violations",[])) for r in results)
+    avg = round(sum(r["score"] for r in results) / max(len(results), 1), 1)
+    total_viol = sum(len(r.get("violations", [])) for r in results)
     return {"id": uid, "desc": test["desc"], "avg_score": avg, "total_violations": total_viol, "results": results}
+
 
 def _detect_constraints(query: str) -> list:
     """从查询中提取约束关键词"""
     constraints = []
     patterns = {
-        "无辣": ["不辣","不吃辣","不能吃辣","不要辣","无辣"],
-        "无冰": ["不冰","不吃冰","不能吃冰","不要冰","无冰"],
-        "无生冷": ["不生","不吃生","不能吃生","生冷"],
-        "高蛋白": ["高蛋白","低卡","健身","鸡胸肉","蛋白质"],
-        "无油炸": ["不油炸","不吃油炸","无油炸"],
-        "素食": ["素食","不吃肉","不吃蛋","不吃奶","纯素"],
-        "少走路": ["不走","膝盖","腿脚","不能走","走不动","走10分钟","15分钟"],
-        "要卫生间": ["卫生间","厕所","洗手间"],
-        "孕妇": ["怀孕","孕妇","孕期"],
-        "低预算": ["40以内","便宜","穷","省钱","预算有限"],
-        "高档": ["高档","商务","宴请","包间","人均200"],
-        "少吃辣": ["少辣","微辣"],
-        "拍照": ["拍照","打卡","发朋友圈","好看","网红"],
-        "无障碍": ["无障碍","电梯","不爬","不能爬楼梯"],
-        "甜品": ["甜品","奶茶","甜","蛋糕","糖"],
-        "孩子": ["孩子","儿子","女儿","小孩","儿童","8岁"],
-        "安静": ["安静","不吵","舒服","坐下"],
-        "博物馆": ["博物馆","古迹","历史","文化"],
-        "喝茶": ["喝茶","茶","下棋","棋"],
+        "无辣": ["不辣", "不吃辣", "不能吃辣", "不要辣", "无辣"],
+        "无冰": ["不冰", "不吃冰", "不能吃冰", "不要冰", "无冰"],
+        "无生冷": ["不生", "不吃生", "不能吃生", "生冷"],
+        "高蛋白": ["高蛋白", "低卡", "健身", "鸡胸肉", "蛋白质"],
+        "无油炸": ["不油炸", "不吃油炸", "无油炸"],
+        "素食": ["素食", "不吃肉", "不吃蛋", "不吃奶", "纯素"],
+        "少走路": ["不走", "膝盖", "腿脚", "不能走", "走不动", "走10分钟", "15分钟"],
+        "要卫生间": ["卫生间", "厕所", "洗手间"],
+        "孕妇": ["怀孕", "孕妇", "孕期"],
+        "低预算": ["40以内", "便宜", "穷", "省钱", "预算有限"],
+        "高档": ["高档", "商务", "宴请", "包间", "人均200"],
+        "少吃辣": ["少辣", "微辣"],
+        "拍照": ["拍照", "打卡", "发朋友圈", "好看", "网红"],
+        "无障碍": ["无障碍", "电梯", "不爬", "不能爬楼梯"],
+        "甜品": ["甜品", "奶茶", "甜", "蛋糕", "糖"],
+        "孩子": ["孩子", "儿子", "女儿", "小孩", "儿童", "8岁"],
+        "安静": ["安静", "不吵", "舒服", "坐下"],
+        "博物馆": ["博物馆", "古迹", "历史", "文化"],
+        "喝茶": ["喝茶", "茶", "下棋", "棋"],
     }
     for cat, keys in patterns.items():
         if any(k in query for k in keys):
             constraints.append(cat)
     return constraints
+
 
 def _check_violations(stops: list, narration: str, constraints: list, session) -> list:
     """检查是否违反了用户约束"""
@@ -213,64 +235,80 @@ def _check_violations(stops: list, narration: str, constraints: list, session) -
     poi_text = " ".join(stops) + " " + narration
 
     for c in constraints:
-        if c == "无辣" and any(w in poi_text for w in ["辣","麻辣","火锅","川菜"]):
-            violations.append(f"含辣: {[s for s in stops if any(w in s for w in ['火锅','麻辣','辣'])]}")
-        if c == "素食" and any(w in poi_text.lower() for w in ["肉","鸡","鱼","虾","蟹","牛","猪","羊","蛋","奶"]):
+        if c == "无辣" and any(w in poi_text for w in ["辣", "麻辣", "火锅", "川菜"]):
+            violations.append(f"含辣: {[s for s in stops if any(w in s for w in ['火锅', '麻辣', '辣'])]}")
+        if c == "素食" and any(
+            w in poi_text.lower() for w in ["肉", "鸡", "鱼", "虾", "蟹", "牛", "猪", "羊", "蛋", "奶"]
+        ):
             violations.append("可能含动物制品")
-        if c == "无油炸" and any(w in poi_text for w in ["炸","烤串","烧烤"]):
+        if c == "无油炸" and any(w in poi_text for w in ["炸", "烤串", "烧烤"]):
             violations.append("含油炸/烧烤")
         if c == "少走路" and len(stops) > 3:
             violations.append("站点太多（>3），可能走太多路")
-        if c == "高蛋白" and not any(w in poi_text for w in ["鸡","牛","鱼","虾","蛋","豆","肉"]):
+        if c == "高蛋白" and not any(w in poi_text for w in ["鸡", "牛", "鱼", "虾", "蛋", "豆", "肉"]):
             violations.append("缺少高蛋白食物")
-        if c == "拍照" and not any(w in poi_text for w in ["景","公园","花","展","咖啡","甜品","书"]):
+        if c == "拍照" and not any(w in poi_text for w in ["景", "公园", "花", "展", "咖啡", "甜品", "书"]):
             violations.append("缺少拍照友好场所")
-        if c == "喝茶" and not any(w in poi_text for w in ["茶","棋","公园"]):
+        if c == "喝茶" and not any(w in poi_text for w in ["茶", "棋", "公园"]):
             violations.append("缺少茶馆/棋牌")
-        if c == "博物馆" and not any(w in poi_text for w in ["博物馆","古迹","遗址","文化","历史"]):
+        if c == "博物馆" and not any(w in poi_text for w in ["博物馆", "古迹", "遗址", "文化", "历史"]):
             violations.append("缺少博物馆/文化场所")
-        if c == "孩子" and any(w in poi_text for w in ["酒吧","KTV","棋牌","会所"]):
+        if c == "孩子" and any(w in poi_text for w in ["酒吧", "KTV", "棋牌", "会所"]):
             violations.append("含儿童不适宜场所")
-        if c == "甜品" and not any(w in poi_text for w in ["甜","奶茶","糖","咖啡","蛋糕","冰"]):
+        if c == "甜品" and not any(w in poi_text for w in ["甜", "奶茶", "糖", "咖啡", "蛋糕", "冰"]):
             violations.append("缺少甜品/饮品")
     return violations
+
 
 def _rate_persona(query, narration, stops, session, elapsed, violations):
     s = 0.0
     issues = []
-    if narration and len(narration) > 50: s += 1.0
-    else: return (0.0, ["无输出"])
+    if narration and len(narration) > 50:
+        s += 1.0
+    else:
+        return (0.0, ["无输出"])
 
-    if stops and len(stops) >= 1: s += 1.0
-    else: return (1.0, ["无POI"])
+    if stops and len(stops) >= 1:
+        s += 1.0
+    else:
+        return (1.0, ["无POI"])
 
-    if not violations: s += 1.5
-    elif len(violations) == 1: s += 1.0
-    else: s += 0.5
+    if not violations:
+        s += 1.5
+    elif len(violations) == 1:
+        s += 1.0
+    else:
+        s += 0.5
     issues.extend(violations)
 
-    if len(stops) >= 2: s += 0.5
-    if elapsed < 60: s += 0.5
-    if "```mermaid" in narration or "分钟" in narration: s += 0.5
+    if len(stops) >= 2:
+        s += 0.5
+    if elapsed < 60:
+        s += 0.5
+    if "```mermaid" in narration or "分钟" in narration:
+        s += 0.5
     return (min(s, 5.0), issues)
 
+
 if __name__ == "__main__":
-    print(f"👥 朋友推荐测试 — 10 个用户画像 + 3 个组团场景")
-    print(f"{'='*60}")
+    print("👥 朋友推荐测试 — 10 个用户画像 + 3 个组团场景")
+    print(f"{'=' * 60}")
     all_solo = []
     all_group = []
 
     for i, test in enumerate(TESTS):
-        if i > 0: time.sleep(2)
+        if i > 0:
+            time.sleep(2)
         r = run_one_test(test)
         all_solo.append(r)
         s = r["avg_score"]
         status = "✅" if s >= 4 else "⚠️" if s >= 3 else "❌"
         print(f"  => {status} {r['id']:20s} {s:.1f}/5 viol={r['total_violations']}\n")
 
-    print(f"\n── 组团场景 ──")
+    print("\n── 组团场景 ──")
     for i, test in enumerate(GROUP_TESTS):
-        if i > 0: time.sleep(2)
+        if i > 0:
+            time.sleep(2)
         r = run_one_test(test)
         all_group.append(r)
         s = r["avg_score"]
@@ -278,20 +316,20 @@ if __name__ == "__main__":
         print(f"  => {status} {r['id']:25s} {s:.1f}/5 viol={r['total_violations']}\n")
 
     # ── 汇总 ──
-    print(f"\n{'='*60}")
-    print(f"📊 用户画像测试汇总")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("📊 用户画像测试汇总")
+    print(f"{'=' * 60}")
     solo_scores = [r["avg_score"] for r in all_solo]
     for r in all_solo:
         s = r["avg_score"]
         status = "✅" if s >= 4 else "⚠️" if s >= 3 else "❌"
         violations = []
         for rd in r["results"]:
-            violations.extend(rd.get("violations",[]))
+            violations.extend(rd.get("violations", []))
         v_str = ", ".join(violations[:2]) if violations else "无违规"
         print(f"  {status} {r['id']:20s} {s:.1f}/5 | {v_str}")
 
-    print(f"\n  个人均分: {round(sum(solo_scores)/len(solo_scores),1)}/5")
+    print(f"\n  个人均分: {round(sum(solo_scores) / len(solo_scores), 1)}/5")
 
     group_scores = [r["avg_score"] for r in all_group]
     for r in all_group:
@@ -299,15 +337,18 @@ if __name__ == "__main__":
         status = "✅" if s >= 4 else "⚠️" if s >= 3 else "❌"
         violations = []
         for rd in r["results"]:
-            violations.extend(rd.get("violations",[]))
+            violations.extend(rd.get("violations", []))
         v_str = ", ".join(violations[:3]) if violations else "无违规"
         print(f"  {status} {r['id']:25s} {s:.1f}/5 | {v_str}")
 
-    print(f"\n  组团均分: {round(sum(group_scores)/len(group_scores),1)}/5")
+    print(f"\n  组团均分: {round(sum(group_scores) / len(group_scores), 1)}/5")
 
-    all_data = {"solo": all_solo, "group": all_group,
-                "solo_avg": round(sum(solo_scores)/len(solo_scores),1),
-                "group_avg": round(sum(group_scores)/len(group_scores),1)}
+    all_data = {
+        "solo": all_solo,
+        "group": all_group,
+        "solo_avg": round(sum(solo_scores) / len(solo_scores), 1),
+        "group_avg": round(sum(group_scores) / len(group_scores), 1),
+    }
     with open("data/output/test_friends.json", "w") as f:
         json.dump(all_data, f, ensure_ascii=False, indent=2)
-    print(f"\n📄 data/output/test_friends.json")
+    print("\n📄 data/output/test_friends.json")

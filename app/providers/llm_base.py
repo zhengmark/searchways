@@ -22,14 +22,12 @@ class LLMProvider(ABC):
     """
 
     @abstractmethod
-    def chat(self, messages: list, system: str = None,
-             max_tokens: int = 4096) -> dict:
+    def chat(self, messages: list, system: str = None, max_tokens: int = 4096) -> dict:
         """Send a chat request and return standardized response dict."""
         ...
 
     @abstractmethod
-    def chat_with_tools(self, messages: list, tools: list,
-                        system: str = None, max_tokens: int = 4096) -> dict:
+    def chat_with_tools(self, messages: list, tools: list, system: str = None, max_tokens: int = 4096) -> dict:
         """Send a chat request with tool definitions.
 
         Returns standardized response dict. Tool calls appear as

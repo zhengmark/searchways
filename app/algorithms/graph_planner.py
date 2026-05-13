@@ -1,9 +1,10 @@
 """图路线规划引擎 — 加权图建模 + 投影分段路径选取."""
+
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.algorithms.routing import get_route, decide_transport
-from app.algorithms.geo import haversine, project_ratio
+from app.algorithms.geo import haversine
+from app.algorithms.routing import decide_transport, get_route
 
 # 每个节点只对最近的 K 个邻居调用真实路线 API
 _API_DISTANCE_THRESHOLD_M = 3000
@@ -12,12 +13,12 @@ _K_NEAREST = 8
 
 class SafeGraph:
     """Wrapper around graph adjacency matrix that safely handles None edges."""
-    
+
     def __init__(self, graph: list, nodes: list):
         self._g = graph
         self._n = nodes
         self._n_len = len(graph) if graph else 0
-    
+
     def edge(self, i: int, j: int) -> dict:
         """Get edge (i,j) safely. Returns sentinel values for missing edges."""
         try:
@@ -51,20 +52,19 @@ def _haversine_fallback(lat1, lng1, lat2, lng2, mode: str):
     straight = haversine(lat1, lng1, lat2, lng2)
     road_factor = 1.4
     if mode == "步行":
-        speed = 1.25          # ~4.5 km/h 步行
+        speed = 1.25  # ~4.5 km/h 步行
     elif mode == "骑行":
-        speed = 4.0           # ~14.4 km/h 骑行
+        speed = 4.0  # ~14.4 km/h 骑行
     elif mode == "公交/地铁":
-        speed = 6.5           # ~23 km/h 含等车/换乘
+        speed = 6.5  # ~23 km/h 含等车/换乘
     else:  # 驾车
-        speed = 8.0           # ~29 km/h 城市路况
+        speed = 8.0  # ~29 km/h 城市路况
     dist = int(straight * road_factor)
     dur = int(dist / speed)
     return dist, dur
 
 
-def pre_prune_pois(pois: list, max_pois: int = 15,
-                   anchor_lat=None, anchor_lng=None) -> list:
+def pre_prune_pois(pois: list, max_pois: int = 15, anchor_lat=None, anchor_lng=None) -> list:
     """当 POI 过多时预剪枝，保留评分最高的 top-N.
 
     优先保留靠近起终点的 POI（距离加权）。
@@ -105,32 +105,35 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
     valid_pois = [p for p in pois if _validate_poi_coords(p)]
     if len(valid_pois) < len(pois):
         import logging
-        logging.getLogger(__name__).warning(
-            f"Filtered {len(pois) - len(valid_pois)} POIs with invalid coordinates"
-        )
+
+        logging.getLogger(__name__).warning(f"Filtered {len(pois) - len(valid_pois)} POIs with invalid coordinates")
     pois = valid_pois
 
     for i, p in enumerate(pois):
-        nodes.append({
-            "id": i + 1,
-            "name": p["name"],
-            "lat": p["lat"],
-            "lng": p["lng"],
-            "type": "poi",
-            "rating": p.get("rating"),
-            "price": p.get("price_per_person"),
-            "category": p.get("category", ""),
-        })
+        nodes.append(
+            {
+                "id": i + 1,
+                "name": p["name"],
+                "lat": p["lat"],
+                "lng": p["lng"],
+                "type": "poi",
+                "rating": p.get("rating"),
+                "price": p.get("price_per_person"),
+                "category": p.get("category", ""),
+            }
+        )
 
     has_dest = destination is not None
     if has_dest:
-        nodes.append({
-            "id": len(nodes),
-            "name": "终点",
-            "lat": destination[0],
-            "lng": destination[1],
-            "type": "destination",
-        })
+        nodes.append(
+            {
+                "id": len(nodes),
+                "name": "终点",
+                "lat": destination[0],
+                "lng": destination[1],
+                "type": "destination",
+            }
+        )
 
     n = len(nodes)
     graph = [[None] * n for _ in range(n)]
@@ -140,18 +143,16 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
     all_pairs = []
     for i in range(n):
         for j in range(i + 1, n):
-            d = haversine(nodes[i]["lat"], nodes[i]["lng"],
-                          nodes[j]["lat"], nodes[j]["lng"])
+            d = haversine(nodes[i]["lat"], nodes[i]["lng"], nodes[j]["lat"], nodes[j]["lng"])
             straight_dists[(i, j)] = d
             all_pairs.append((i, j, d))
 
     # 阶段2: 决定哪些边需要 API（每节点 K 近邻 + 阈值过滤）
     api_pairs = set()
     for i in range(n):
-        neighbors = [(j, straight_dists.get((min(i, j), max(i, j)), float("inf")))
-                     for j in range(n) if j != i]
+        neighbors = [(j, straight_dists.get((min(i, j), max(i, j)), float("inf"))) for j in range(n) if j != i]
         neighbors.sort(key=lambda x: x[1])
-        for j, d in neighbors[:min(_K_NEAREST, len(neighbors))]:
+        for j, d in neighbors[: min(_K_NEAREST, len(neighbors))]:
             if d <= _API_DISTANCE_THRESHOLD_M:
                 api_pairs.add((min(i, j), max(i, j)))
 
@@ -167,8 +168,7 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
                 return result["distance"], result["duration"], result["mode"]
         except Exception:
             pass
-        fallback_dist, fallback_dur = _haversine_fallback(ni["lat"], ni["lng"],
-                                                          nj["lat"], nj["lng"], mode)
+        fallback_dist, fallback_dur = _haversine_fallback(ni["lat"], ni["lng"], nj["lat"], nj["lng"], mode)
         return fallback_dist, fallback_dur, mode
 
     if api_pairs:
@@ -188,8 +188,7 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
             ni, nj = nodes[i], nodes[j]
             straight = haversine(ni["lat"], ni["lng"], nj["lat"], nj["lng"])
             mode = decide_transport(straight)
-            dist, dur = _haversine_fallback(ni["lat"], ni["lng"],
-                                            nj["lat"], nj["lng"], mode)
+            dist, dur = _haversine_fallback(ni["lat"], ni["lng"], nj["lat"], nj["lng"], mode)
             graph[i][j] = graph[j][i] = {
                 "distance": dist,
                 "duration": dur,
@@ -201,7 +200,7 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
 
 def _projection_and_perp(lat: float, lng: float, origin: dict, dest: dict) -> tuple:
     """Calculate (projection, perp_dist_km) for a POI relative to OD line.
-    
+
     projection: raw (unclamped) value along OD vector. 0=origin, 1=destination.
     perp_dist_km: perpendicular distance from OD centerline in km.
     """
@@ -209,16 +208,17 @@ def _projection_and_perp(lat: float, lng: float, origin: dict, dest: dict) -> tu
     dlat, dlng = dest["lat"], dest["lng"]
     dx = dlat - olat
     dy = dlng - olng
-    denom = dx*dx + dy*dy
+    denom = dx * dx + dy * dy
     if denom < 1e-12:
         return 0.5, 0.0
     # Raw projection (not clamped — preserves spatial ordering)
-    t = ((lat - olat)*dx + (lng - olng)*dy) / denom
+    t = ((lat - olat) * dx + (lng - olng) * dy) / denom
     # Perpendicular distance (cross product)
-    cross = abs((lng - olng)*dx - (lat - olat)*dy)
+    cross = abs((lng - olng) * dx - (lat - olat) * dy)
     perp_deg = cross / math.sqrt(denom)
-    perp_km = perp_deg * 111.32 * math.cos(math.radians((olat + dlat)/2))
+    perp_km = perp_deg * 111.32 * math.cos(math.radians((olat + dlat) / 2))
     return t, perp_km
+
 
 def _pick_from_segments(items: list, num_stops: int, graph: list) -> list:
     """从排序后的 POI 列表中按分段贪心选取，强制前向约束（不回退）.
@@ -230,8 +230,8 @@ def _pick_from_segments(items: list, num_stops: int, graph: list) -> list:
     Returns: [node_id, ...]
     """
     selected, picked_cats = [], set()
-    last_proj = -float('inf')  # forward-only constraint
-    
+    last_proj = -float("inf")  # forward-only constraint
+
     for i in range(num_stops):
         lo = i * len(items) // num_stops
         hi = (i + 1) * len(items) // num_stops
@@ -254,54 +254,47 @@ def _pick_from_segments(items: list, num_stops: int, graph: list) -> list:
             return min_d
 
         # 多目标评分：品类多样 + 评分 + 绕路惩罚 + 前向优先
-        def _score(x):
+        def _score(x, _lp=last_proj):
             proj, rating = x[0], x[1]
             cat_bonus = 0 if x[3] in picked_cats else 1.0
             min_dist_to_selected = _safe_min_dist(graph, x[2], selected)
             dev_penalty = max(0, 1 - min_dist_to_selected / 3000) * 0.3
             # Forward preference: bonus for forward progression
-            fwd_bonus = min(1.0, max(0, (proj - last_proj) * 2)) if last_proj > -float('inf')/2 else 0
+            fwd_bonus = min(1.0, max(0, (proj - _lp) * 2)) if _lp > -float("inf") / 2 else 0
             return rating + cat_bonus * 0.5 - dev_penalty + fwd_bonus * 0.5
 
         best = None
         best_proj = None
-        for proj, rating, pid, cat in sorted(seg, key=_score, reverse=True):
+        for proj, _rating, pid, cat in sorted(seg, key=_score, reverse=True):
             # 前向约束：只选 projection >= 上一个选中 item 的 projection
             if proj < last_proj - 0.05:
                 continue
-            too_close = any(
-                graph[pid][sid] and graph[pid][sid]["distance"] < 500
-                for sid in selected
-            )
+            too_close = any(graph[pid][sid] and graph[pid][sid]["distance"] < 500 for sid in selected)
             if not too_close:
                 best, best_proj = pid, proj
                 picked_cats.add(cat)
                 break
-        
+
         if best is None:
             # 放宽：不检查前向约束，选同段评分最高的
-            for proj, rating, pid, cat in sorted(seg, key=lambda x: -x[1]):
-                too_close = any(
-                    graph[pid][sid] and graph[pid][sid]["distance"] < 500
-                    for sid in selected
-                )
+            for proj, _rating, pid, cat in sorted(seg, key=lambda x: -x[1]):
+                too_close = any(graph[pid][sid] and graph[pid][sid]["distance"] < 500 for sid in selected)
                 if not too_close:
                     best, best_proj = pid, proj
                     picked_cats.add(cat)
                     break
-        
+
         if best is None:
             best = seg[0][2]
             best_proj = seg[0][0]
             picked_cats.add(seg[0][3])
-        
+
         selected.append(best)
         last_proj = best_proj  # update forward constraint
     return selected
 
 
-def shortest_path(graph: list, nodes: list, num_stops: int,
-                  budget_level: str = "medium") -> dict:
+def shortest_path(graph: list, nodes: list, num_stops: int, budget_level: str = "medium") -> dict:
     """基于起终点连线投影的分段贪心算法.
 
     有终点 → 投影分段（POI 投影到起终点连线，均分 num_stops 段）
@@ -355,25 +348,29 @@ def shortest_path(graph: list, nodes: list, num_stops: int,
             continue
         path.append(pid)
         e = graph[current][pid]
-        segments.append({
-            "from": nodes[current]["name"],
-            "to": nodes[pid]["name"],
-            "distance": e["distance"],
-            "duration": e["duration"],
-            "transport": e["transport"],
-        })
+        segments.append(
+            {
+                "from": nodes[current]["name"],
+                "to": nodes[pid]["name"],
+                "distance": e["distance"],
+                "duration": e["duration"],
+                "transport": e["transport"],
+            }
+        )
         current = pid
 
     if dest_id is not None and dest_id not in path and graph[current][dest_id]:
         path.append(dest_id)
         e = graph[current][dest_id]
-        segments.append({
-            "from": nodes[current]["name"],
-            "to": nodes[dest_id]["name"],
-            "distance": e["distance"],
-            "duration": e["duration"],
-            "transport": e["transport"],
-        })
+        segments.append(
+            {
+                "from": nodes[current]["name"],
+                "to": nodes[dest_id]["name"],
+                "distance": e["distance"],
+                "duration": e["duration"],
+                "transport": e["transport"],
+            }
+        )
 
     return {
         "node_ids": path,

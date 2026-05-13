@@ -1,21 +1,23 @@
 """多模式路线规划 — 步行 / 骑行 / 公交地铁 / 驾车，含缓存."""
 
-import time
 import threading
-from app.providers.amap_provider import (
-    get_walking_route, transit_route, biking_route, driving_route,
-)
+import time
 
+from app.providers.amap_provider import (
+    biking_route,
+    driving_route,
+    get_walking_route,
+    transit_route,
+)
 
 # ── 缓存 ──────────────────────────────────────────
 
-_cache = {}          # key → (expires_at, result)
+_cache = {}  # key → (expires_at, result)
 _cache_lock = threading.Lock()
-_CACHE_TTL = 30      # 秒
+_CACHE_TTL = 30  # 秒
 
 
-def _cache_key(lng1: float, lat1: float, lng2: float, lat2: float,
-               mode: str) -> str:
+def _cache_key(lng1: float, lat1: float, lng2: float, lat2: float, mode: str) -> str:
     """按 ~11m 精度（4 位小数）生成坐标对缓存键."""
     return f"{lng1:.4f},{lat1:.4f}|{lng2:.4f},{lat2:.4f}|{mode}"
 
@@ -42,6 +44,7 @@ def _cache_put(ckey: str, result: dict):
 
 # ── 交通模式决策 ──────────────────────────────────
 
+
 def decide_transport(distance_meters: float) -> str:
     """根据 haversine 直线距离决定推荐交通方式."""
     if distance_meters < 800:
@@ -55,8 +58,8 @@ def decide_transport(distance_meters: float) -> str:
 
 # ── 统一路线接口 ──────────────────────────────────
 
-def get_route(origin: str, destination: str, mode: str = "auto",
-              city: str = "西安") -> dict | None:
+
+def get_route(origin: str, destination: str, mode: str = "auto", city: str = "西安") -> dict | None:
     """获取两点间路线（自动选模式或指定模式），含缓存.
 
     Args:
@@ -78,6 +81,7 @@ def get_route(origin: str, destination: str, mode: str = "auto",
 
     if mode == "auto":
         from app.algorithms.geo import haversine
+
         dist = haversine(o_lat, o_lng, d_lat, d_lng)
         mode = decide_transport(dist)
 
@@ -104,6 +108,7 @@ def get_route(origin: str, destination: str, mode: str = "auto",
 
 # ── 向后兼容 ──────────────────────────────────────
 
+
 def walk_distance(origin: str, destination: str) -> dict | None:
     """向后兼容的步行距离接口.
 
@@ -117,8 +122,8 @@ def walk_distance(origin: str, destination: str) -> dict | None:
 
 # ── 两点预览连线 ──────────────────────────────────
 
-def preview_connection(origin_coords: tuple, dest_coords: tuple,
-                       city: str = "西安") -> dict | None:
+
+def preview_connection(origin_coords: tuple, dest_coords: tuple, city: str = "西安") -> dict | None:
     """获取两点间交通详情（用于前端连线预览）.
 
     Args:
@@ -132,8 +137,8 @@ def preview_connection(origin_coords: tuple, dest_coords: tuple,
     d_str = f"{dest_coords[1]},{dest_coords[0]}"
 
     from app.algorithms.geo import haversine
-    dist = haversine(origin_coords[0], origin_coords[1],
-                     dest_coords[0], dest_coords[1])
+
+    dist = haversine(origin_coords[0], origin_coords[1], dest_coords[0], dest_coords[1])
     mode = decide_transport(dist)
 
     result = get_route(o_str, d_str, mode=mode, city=city)
@@ -141,8 +146,10 @@ def preview_connection(origin_coords: tuple, dest_coords: tuple,
         return None
 
     return {
-        "from_lat": origin_coords[0], "from_lng": origin_coords[1],
-        "to_lat": dest_coords[0], "to_lng": dest_coords[1],
+        "from_lat": origin_coords[0],
+        "from_lng": origin_coords[1],
+        "to_lat": dest_coords[0],
+        "to_lng": dest_coords[1],
         "mode": result["mode"],
         "distance": result["distance"],
         "duration": result["duration"],

@@ -2,8 +2,10 @@
 LongCat API 连通性测试
 用法: python test_longcat.py
 """
-import requests
+
 import json
+
+import requests
 
 API_URL = "https://api.longcat.chat/anthropic/v1/messages"
 API_KEY = "ak_2R67S24Qy8lz9zc9vt1799Dc6Vv5h"
@@ -45,7 +47,7 @@ try:
     elif resp.status_code == 500:
         print("❌ 服务端错误 — 模型可能暂时不可用，或需要联系 LongCat 管理员")
     else:
-        print(f"❌ 未知错误")
+        print("❌ 未知错误")
 
 except requests.exceptions.ConnectionError:
     print("❌ 网络连接失败 — 无法访问 API 地址")

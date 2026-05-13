@@ -1,9 +1,9 @@
 """认证模块 — 密码 bcrypt 哈希 + JWT 签发/验证 + FastAPI 依赖注入."""
-import sqlite3
+
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException
@@ -18,17 +18,21 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+
 def hash_password(password: str) -> str:
     return _pwd_ctx.hash(password)
 
+
 def verify_password(plain: str, hashed: str) -> bool:
     return _pwd_ctx.verify(plain, hashed)
+
 
 # ── JWT ───────────────────────────────────────────
 
 _SECRET = os.getenv("JWT_SECRET", "jwt-secret-change-me")
 _ALGORITHM = "HS256"
 _EXPIRE_DAYS = 7
+
 
 def create_token(username: str) -> str:
     payload = {
@@ -38,6 +42,7 @@ def create_token(username: str) -> str:
     }
     return jwt.encode(payload, _SECRET, algorithm=_ALGORITHM)
 
+
 def verify_token(token: str) -> str | None:
     """验证 token，返回 username 或 None."""
     try:
@@ -45,6 +50,7 @@ def verify_token(token: str) -> str | None:
         return payload.get("sub")
     except JWTError:
         return None
+
 
 # ── 用户数据库 ─────────────────────────────────────
 
@@ -67,6 +73,7 @@ def _init_auth_db():
     conn.close()
     _auth_db_initialized = True
 
+
 def create_user(username: str, password: str) -> dict:
     """注册新用户，返回 {'token', 'username'}。重名时抛 HTTPException."""
     _init_auth_db()
@@ -84,6 +91,7 @@ def create_user(username: str, password: str) -> dict:
     finally:
         conn.close()
 
+
 def authenticate_user(username: str, password: str) -> dict:
     """验证登录，返回 {'token', 'username'}。失败抛 HTTPException."""
     _init_auth_db()
@@ -98,13 +106,15 @@ def authenticate_user(username: str, password: str) -> dict:
     finally:
         conn.close()
 
+
 # ── FastAPI 依赖注入 ───────────────────────────────
 
 _bearer = HTTPBearer(auto_error=False)
 
+
 async def get_current_user_optional(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-) -> Optional[str]:
+) -> str | None:
     """从 Authorization header 提取 username（可选，无 token 返回 None）."""
     if credentials is None:
         return None
@@ -112,6 +122,7 @@ async def get_current_user_optional(
     if username is None:
         raise HTTPException(status_code=401, detail="token 无效或已过期")
     return username
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),

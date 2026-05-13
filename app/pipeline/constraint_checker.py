@@ -1,11 +1,10 @@
 """输出侧约束校验 — LLM 生成路线后检测违规并标记."""
-import re
 
 
 # ── 违规检测规则 ──────────────────────────────────
 
-def check_constraints(stops: list, narration: str, pois: list,
-                      user_constraints: dict = None) -> tuple:
+
+def check_constraints(stops: list, narration: str, pois: list, user_constraints: dict = None) -> tuple:
     """检测路线是否违反用户约束.
 
     Args:
@@ -33,16 +32,17 @@ def check_constraints(stops: list, narration: str, pois: list,
     pace = user_constraints.get("pace", "")
     if pace == "slow":
         if len(stops) > 3:
-            violations.append(("高", "站点过多({0}个)，不适合慢节奏/少走路需求".format(len(stops))))
+            violations.append(("高", f"站点过多({len(stops)}个)，不适合慢节奏/少走路需求"))
         # 检查是否有需要大量走路的场所
         for s in stops:
             if any(w in s for w in ["大唐芙蓉园", "大明宫", "城墙", "曲江池"]):
-                violations.append(("中", "含大面积景区'{0}'，可能需大量走路".format(s[:10])))
+                violations.append(("中", f"含大面积景区'{s[:10]}'，可能需大量走路"))
 
     budget = user_constraints.get("budget", "")
     if budget == "high":
-        cheap_pois = [p for p in pois if (p.get("price_per_person") or 999) < 100
-                      and "咖啡" not in p.get("category", "")]
+        cheap_pois = [
+            p for p in pois if (p.get("price_per_person") or 999) < 100 and "咖啡" not in p.get("category", "")
+        ]
         if len(cheap_pois) > len(pois) // 2:
             violations.append(("中", "半数以上POI人均<100，不满足高档需求"))
     elif budget == "low":
@@ -103,15 +103,15 @@ def _check_diet(diet_type: str, combined: str, stops: list, pois: list):
             # 检查是否在 stops 名称中（不在解说中的话可能是 LLM 脑补）
             in_stops = any(fw in s for s in stops)
             if in_stops:
-                return ("高", "含'{0}'({1}): 违反{2}".format(fw, _find_src(fw, stops)[:20], diet_type))
-            return ("低", "解说提及'{0}': 可能违反{1}".format(fw, diet_type))
+                return ("高", f"含'{fw}'({_find_src(fw, stops)[:20]}): 违反{diet_type}")
+            return ("低", f"解说提及'{fw}': 可能违反{diet_type}")
 
     # 必需词
     required = _REQUIRED_KEYWORDS.get(diet_type, [])
     if required:
         found = any(rw in combined for rw in required)
         if not found:
-            return ("中", "缺少{0}所需食物(期望:{1})".format(diet_type, ",".join(required[:3])))
+            return ("中", "缺少{}所需食物(期望:{})".format(diet_type, ",".join(required[:3])))
 
     # 特殊检查
     if diet_type == "要卫生间":
@@ -150,16 +150,64 @@ _CONSTRAINT_PATTERNS = {
 }
 
 _PACE_PATTERNS = {
-    "slow": ["不走", "膝盖", "腿脚", "不能走", "走不动", "少走", "走10分钟", "15分钟",
-             "孕妇", "怀孕", "老人", "退休", "残障", "无障碍", "电梯", "不爬楼梯"],
+    "slow": [
+        "不走",
+        "膝盖",
+        "腿脚",
+        "不能走",
+        "走不动",
+        "少走",
+        "走10分钟",
+        "15分钟",
+        "孕妇",
+        "怀孕",
+        "老人",
+        "退休",
+        "残障",
+        "无障碍",
+        "电梯",
+        "不爬楼梯",
+    ],
     "fast": ["快速", "赶时间", "速览", "高效"],
 }
 
 _BUDGET_PATTERNS = {
-    "low": ["便宜", "40以内", "50以内", "30以内", "穷", "省钱", "免费", "低预算", "预算有限",
-            "人均30", "人均40", "人均50", "不要太贵", "不贵", "平民", "经济实惠", "划算"],
-    "high": ["高档", "商务", "宴请", "包间", "人均200", "人均150", "米其林", "奢华",
-             "吃顿好的", "贵的", "要面子", "请客", "客户", "重要", "体面"],
+    "low": [
+        "便宜",
+        "40以内",
+        "50以内",
+        "30以内",
+        "穷",
+        "省钱",
+        "免费",
+        "低预算",
+        "预算有限",
+        "人均30",
+        "人均40",
+        "人均50",
+        "不要太贵",
+        "不贵",
+        "平民",
+        "经济实惠",
+        "划算",
+    ],
+    "high": [
+        "高档",
+        "商务",
+        "宴请",
+        "包间",
+        "人均200",
+        "人均150",
+        "米其林",
+        "奢华",
+        "吃顿好的",
+        "贵的",
+        "要面子",
+        "请客",
+        "客户",
+        "重要",
+        "体面",
+    ],
 }
 
 
