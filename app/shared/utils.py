@@ -3,6 +3,11 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from app.core.constraint_model import RouteConstraints
+except ImportError:
+    RouteConstraints = None
+
 # ── Leaflet 静态资源 ─────────────────────────────────
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -38,6 +43,7 @@ class AgentSession:
         self.last_user_input = ""
         self.review_score = 0
         self.budget = ""
+        self.constraints = None  # RouteConstraints, set on first use
         self.violations = []
         self.last_clusters_hint = []
 
@@ -56,12 +62,24 @@ class AgentSession:
         """JSON 序列化."""
         d = {}
         for k, v in self.__dict__.items():
+            # Skip private/internal attributes (e.g. _last_enriched)
+            if k.startswith("_"):
+                continue
             if isinstance(v, tuple):
                 d[k] = list(v)
             elif isinstance(v, set):
                 d[k] = list(v)
+            elif hasattr(v, 'to_dict'):
+                d[k] = v.to_dict()
+            elif hasattr(v, '__dataclass_fields__'):
+                # Convert dataclass to dict (e.g. EnrichedInput)
+                from dataclasses import asdict
+                d[k] = asdict(v)
             else:
                 d[k] = v
+        # Serialize constraints if present
+        if self.constraints is not None and hasattr(self.constraints, 'to_dict'):
+            d['constraints'] = self.constraints.to_dict()
         return d
 
     @classmethod
@@ -73,8 +91,13 @@ class AgentSession:
                 v = tuple(v)
             if k == "dest_coords" and isinstance(v, list) and len(v) == 2:
                 v = tuple(v)
+            if k == "constraints":
+                continue  # handled separately below
             if hasattr(s, k):
                 setattr(s, k, v)
+        # Deserialize constraints
+        if 'constraints' in d and d['constraints'] and RouteConstraints is not None:
+            s.constraints = RouteConstraints.from_dict(d['constraints'])
         return s
 
 
@@ -155,6 +178,23 @@ _PLACE_RE = re.compile(
     r"路|街|巷|道|里|胡同|园|公园|广场|大厦|商场|购物中心|门|楼|塔|"
     r"景区|博物馆|图书馆|医院|学校|大学|学院|机场|码头)"
 )
+
+
+# ── Mermaid 提取 ──────────────────────────────────────
+
+def extract_mermaid_from_text(text: str) -> tuple[str, str]:
+    """从文本中提取 ```mermaid 代码块，返回 (清理后文本, mermaid代码).
+    如果无 mermaid 块，返回 (原文, "").
+    """
+    m = re.search(r"```mermaid\s*\n(.*?)\n```", text, re.DOTALL)
+    if not m:
+        return text, ""
+    mermaid = m.group(1).strip()
+    narration = text[:m.start()].strip()
+    trailer = text[m.end():].strip()
+    if trailer:
+        narration += "\n\n" + trailer
+    return narration, mermaid
 
 
 # ── Mermaid / HTML 渲染 ───────────────────────────────

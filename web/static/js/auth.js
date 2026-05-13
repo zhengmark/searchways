@@ -159,7 +159,8 @@ async function initAuth() {
       clearAuth();
     }
   } catch {
-    // token 过期，保留本地状态允许离线使用
+    // token 验证失败（过期/网络错误），清除登录态
+    clearAuth();
   }
   updateNavUI();
 }

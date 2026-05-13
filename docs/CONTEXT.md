@@ -16,7 +16,7 @@
 
 | 模块 | 文件 | 状态 | 说明 |
 |------|------|------|------|
-| LLM 意图解析 | `app/core/intent_agent.py` | ✅ 完成 | 深度意图解析 + UserProfile 推理 + 搜索提示 |
+|| LLM 意图解析 | `deprecated/intent_agent.py` | 🗑️ 已废弃 | 已被统一 Agent 替代，移至 deprecated/ |
 | 地理编码 | `app/providers/amap_provider.py:robust_geocode` | ✅ 完成 | 4 层递进兜底 + 正则回退 + 子串校验 |
 | POI 搜索 | `app/providers/amap_provider.py` | ✅ 完成 | 高德 text/around 双 API + 走廊 4 点采样 |
 | 统一路线 Agent | `app/core/route_agent.py` | ✅ 完成 | 罗斯方案 — LLM 工具调用循环（geocode → query_clusters → build_route → 解说），替代旧多 Agent 串行 |

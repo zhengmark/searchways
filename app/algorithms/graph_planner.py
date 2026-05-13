@@ -1,4 +1,5 @@
 """图路线规划引擎 — 加权图建模 + 投影分段路径选取."""
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.algorithms.routing import get_route, decide_transport
@@ -7,6 +8,42 @@ from app.algorithms.geo import haversine, project_ratio
 # 每个节点只对最近的 K 个邻居调用真实路线 API
 _API_DISTANCE_THRESHOLD_M = 3000
 _K_NEAREST = 8
+
+
+class SafeGraph:
+    """Wrapper around graph adjacency matrix that safely handles None edges."""
+    
+    def __init__(self, graph: list, nodes: list):
+        self._g = graph
+        self._n = nodes
+        self._n_len = len(graph) if graph else 0
+    
+    def edge(self, i: int, j: int) -> dict:
+        """Get edge (i,j) safely. Returns sentinel values for missing edges."""
+        try:
+            if 0 <= i < self._n_len and 0 <= j < self._n_len:
+                row = self._g[i]
+                if row is not None and j < len(row):
+                    e = row[j]
+                    if e is not None and isinstance(e, dict):
+                        return e
+        except (IndexError, TypeError):
+            pass
+        return {"distance": 99999, "duration": 9999, "transport": "步行"}
+
+
+def _validate_poi_coords(poi: dict) -> bool:
+    """Check that a POI has valid lat/lng coordinates."""
+    lat = poi.get("lat")
+    lng = poi.get("lng")
+    if lat is None or lng is None:
+        return False
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+        return -90 <= lat_f <= 90 and -180 <= lng_f <= 180
+    except (ValueError, TypeError):
+        return False
 
 
 def _haversine_fallback(lat1, lng1, lat2, lng2, mode: str):
@@ -63,6 +100,15 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
         graph: 邻接矩阵 graph[i][j] = {"distance", "duration", "transport"}
     """
     nodes = [{"id": 0, "name": "起点", "lat": origin[0], "lng": origin[1], "type": "origin"}]
+
+    # Filter POIs with invalid coordinates before building nodes
+    valid_pois = [p for p in pois if _validate_poi_coords(p)]
+    if len(valid_pois) < len(pois):
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Filtered {len(pois) - len(valid_pois)} POIs with invalid coordinates"
+        )
+    pois = valid_pois
 
     for i, p in enumerate(pois):
         nodes.append({
@@ -153,15 +199,39 @@ def build_graph(origin: tuple, pois: list, destination: tuple = None):
     return nodes, graph
 
 
+def _projection_and_perp(lat: float, lng: float, origin: dict, dest: dict) -> tuple:
+    """Calculate (projection, perp_dist_km) for a POI relative to OD line.
+    
+    projection: raw (unclamped) value along OD vector. 0=origin, 1=destination.
+    perp_dist_km: perpendicular distance from OD centerline in km.
+    """
+    olat, olng = origin["lat"], origin["lng"]
+    dlat, dlng = dest["lat"], dest["lng"]
+    dx = dlat - olat
+    dy = dlng - olng
+    denom = dx*dx + dy*dy
+    if denom < 1e-12:
+        return 0.5, 0.0
+    # Raw projection (not clamped — preserves spatial ordering)
+    t = ((lat - olat)*dx + (lng - olng)*dy) / denom
+    # Perpendicular distance (cross product)
+    cross = abs((lng - olng)*dx - (lat - olat)*dy)
+    perp_deg = cross / math.sqrt(denom)
+    perp_km = perp_deg * 111.32 * math.cos(math.radians((olat + dlat)/2))
+    return t, perp_km
+
 def _pick_from_segments(items: list, num_stops: int, graph: list) -> list:
-    """从排序后的 POI 列表中按分段贪心选取.
+    """从排序后的 POI 列表中按分段贪心选取，强制前向约束（不回退）.
 
     将 items 均分为 num_stops 段，每段取评分最高且品类多样者，500m 内互斥.
+    强制前向：每段只能选 projection >= 上一段已选 POI projection 的 item.
 
-    items: [(sort_key, rating, node_id, category), ...] 已按 sort_key 排序
+    items: [(projection, rating, node_id, category), ...] 已按 projection 排序
     Returns: [node_id, ...]
     """
     selected, picked_cats = [], set()
+    last_proj = -float('inf')  # forward-only constraint
+    
     for i in range(num_stops):
         lo = i * len(items) // num_stops
         hi = (i + 1) * len(items) // num_stops
@@ -169,32 +239,64 @@ def _pick_from_segments(items: list, num_stops: int, graph: list) -> list:
         if not seg:
             continue
 
-        # 多目标评分：品类多样 + 评分 + 绕路惩罚（到已选节点的最小距离）
+        # Safe helper: min distance to already-selected nodes
+        def _safe_min_dist(graph, pid, selected_ids):
+            if not selected_ids:
+                return 0
+            min_d = 99999
+            for sid in selected_ids:
+                try:
+                    edge = graph[pid][sid] if pid < len(graph) and sid < len(graph[pid]) else None
+                    if edge is not None and isinstance(edge, dict):
+                        min_d = min(min_d, edge.get("distance", 99999))
+                except (IndexError, TypeError):
+                    pass
+            return min_d
+
+        # 多目标评分：品类多样 + 评分 + 绕路惩罚 + 前向优先
         def _score(x):
+            proj, rating = x[0], x[1]
             cat_bonus = 0 if x[3] in picked_cats else 1.0
-            rating = x[1]
-            # 绕路惩罚：距离已选节点越近越好
-            min_dist_to_selected = min(
-                (graph[x[2]][sid]["distance"] if graph[x[2]][sid] else 99999)
-                for sid in selected
-            ) if selected else 0
+            min_dist_to_selected = _safe_min_dist(graph, x[2], selected)
             dev_penalty = max(0, 1 - min_dist_to_selected / 3000) * 0.3
-            return rating + cat_bonus * 0.5 - dev_penalty
+            # Forward preference: bonus for forward progression
+            fwd_bonus = min(1.0, max(0, (proj - last_proj) * 2)) if last_proj > -float('inf')/2 else 0
+            return rating + cat_bonus * 0.5 - dev_penalty + fwd_bonus * 0.5
 
         best = None
-        for _, _, pid, cat in sorted(seg, key=_score, reverse=True):
+        best_proj = None
+        for proj, rating, pid, cat in sorted(seg, key=_score, reverse=True):
+            # 前向约束：只选 projection >= 上一个选中 item 的 projection
+            if proj < last_proj - 0.05:
+                continue
             too_close = any(
                 graph[pid][sid] and graph[pid][sid]["distance"] < 500
                 for sid in selected
             )
             if not too_close:
-                best = pid
+                best, best_proj = pid, proj
                 picked_cats.add(cat)
                 break
+        
+        if best is None:
+            # 放宽：不检查前向约束，选同段评分最高的
+            for proj, rating, pid, cat in sorted(seg, key=lambda x: -x[1]):
+                too_close = any(
+                    graph[pid][sid] and graph[pid][sid]["distance"] < 500
+                    for sid in selected
+                )
+                if not too_close:
+                    best, best_proj = pid, proj
+                    picked_cats.add(cat)
+                    break
+        
         if best is None:
             best = seg[0][2]
+            best_proj = seg[0][0]
             picked_cats.add(seg[0][3])
+        
         selected.append(best)
+        last_proj = best_proj  # update forward constraint
     return selected
 
 
@@ -220,11 +322,20 @@ def shortest_path(graph: list, nodes: list, num_stops: int,
         dest = nodes[dest_id]
         items = []
         for p in poi_nodes:
-            t = project_ratio(p["lat"], p["lng"], origin, dest)
+            t, perp = _projection_and_perp(p["lat"], p["lng"], origin, dest)
             rating = p.get("rating") or 3.0
-            items.append((t, rating, p["id"], p.get("category", "")))
+            # Sort key: weighted by projection position and perpendicular distance
+            # Penalize POIs far from the centerline
+            sort_key = t - perp * 0.05  # slight penalty for perpendicular deviation
+            items.append((sort_key, rating, p["id"], p.get("category", ""), t, perp))
+        # First sort by weighted projection for segmentation
         items.sort(key=lambda x: x[0])
-        selected = _pick_from_segments(items, num_stops, graph)
+        # Then strip to (proj, rating, id, category) for _pick_from_segments
+        seg_items = [(x[4], x[1], x[2], x[3]) for x in items]
+        selected = _pick_from_segments(seg_items, num_stops, graph)
+        # Re-sort selected by raw projection to ensure forward ordering
+        selected_projs = {sid: x[4] for sid, x in zip([x[2] for x in seg_items], items) if x[2] in selected}
+        selected.sort(key=lambda sid: selected_projs.get(sid, 999))
     else:
         items = []
         for p in poi_nodes:

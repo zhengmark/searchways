@@ -4,121 +4,56 @@
 """
 
 import json
-import re
 import time
 
 from app.llm_client import call_llm_with_tools, tool_result_message, extract_text, extract_tool_uses
 from app.pipeline.cluster_tools import TOOL_DEFINITIONS, execute_tool
 from app.pipeline.constraint_checker import check_constraints, extract_constraints
-from app.shared.utils import _extract_city, _progress, _build_route_html, AgentSession
+from app.pipeline.input_enricher import InputEnricher, EnrichedInput
+from app.shared.utils import _extract_city, _progress, _build_route_html, AgentSession, extract_mermaid_from_text
 from app.user_profile import UserProfileManager
+from app.core.constraint_model import RouteConstraints
 
-_MAX_TOOL_ITERATIONS = 12
+_MAX_TOOL_ITERATIONS = 16
 
-_SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。你的任务是用工具逐步规划一条从起点到终点的本地游玩路线，最后给用户一个简洁的路线预览。
+_SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。用工具逐步规划路线，最后给出简洁预览。
 
-## 工作流程
+**⚠️ 最优先规则：只要用户表达了出行/吃喝/游玩/逛逛/去哪/推荐/好无聊等意图，无论是否有城市名，必须立即默认城市=西安并调用工具规划路线。严禁反问或输出纯文字建议。仅"你好"/"谢谢"/"你能做什么"等纯社交语句可以不用工具。**
 
-每一步按顺序执行，不要跳过：
+## 工作流程（严格按序，不可跳过）
+1. **geocode** — 解析起终点为经纬度；无终点时可只 geocode 起点
+2. **query_clusters** — 沿途 POI 聚簇查询。
+   - 默认 keywords=["美食","景点"]；无目的探索用 ["著名景点","必去","热门","美食","景点"]
+   - 用户提了地名 → keywords 加入该地名特征词（如回民街→["小吃","夜市","美食"]）
+   - **优先选 cluster_id=-2（城市热门）和 source="amap" 的簇**
+3. **挑选 5-8 个簇**（为交互式编辑留候选）：
+   - **靠拢路线优先**：off_route_km < 2 的簇优先。off_route_km 越大越偏离路线，>3km 的不选
+   - **空间均匀**：projection 0.0-0.2/0.2-0.4/0.4-0.6/0.6-0.8/0.8-1.0 各至少 1 个，禁止集中
+   - **品类匹配**：top_cats 必须匹配用户需求，不匹配不选
+   - **top_poi_names 检查**：名称不像目标品类的簇（如找美食但名含"KTV""棋牌""洗浴"）不选
+   - **用户指定地点优先**：地名一致的簇优先选入
+   - **终点必含**：如果用户指定了终点地名，务必在 projection 0.8-1.0 段选簇覆盖该区域
+   - 多样性和预算匹配
+4. **build_route** — 用选定的 cluster_ids 构建路线。**此步骤不可跳过**。参数必须是 query_clusters 实际返回的 cluster_id。不对同一组 id 重复调用（换顺序不算）
+5. **路线预览** — build_route 成功后，**仅写 2-3 句**（概述 + 站点名 + 总时长），不写 Mermaid 图
 
-1. **理解需求** — 从用户输入中提取：起点、终点、偏好关键词、预算（低/中/高）、期望停靠站数、可用时间
-2. **geocode** — 将起点和终点地名解析为经纬度。如果用户没有指定终点，可以只 geocode 起点
-3. **query_clusters** — 用起终点坐标查询沿途的 POI 聚簇。根据用户的偏好关键词和预算来过滤。如果用户没有明确说偏好，用 keywords=["美食", "景点"]。**如果用户是无目的探索（不知道去哪玩/随便逛逛），用 keywords=["著名景点","必去","热门","美食","景点"]，并优先选择 cluster_id=-2（城市热门景点推荐）和 source="amap" 的簇**。**重要**：如果用户提到了特定的地名（如"回民街""大唐不夜城""大雁塔"），在 query_clusters 的 keywords 中要加入该地名的典型关键词。例如回民街 → keywords=["小吃","夜市","美食","清真"]，大唐不夜城 → keywords=["夜景","步行街","拍照","美食"]
-4. **挑选聚簇** — 从返回的簇中选 5-8 个最合适的（为后续交互式编辑提供更多候选）。考虑：
-   - **热门景点优先**：如果结果中有 cluster_id=-2（source="famous"）或 source="amap" 的簇，优先选择，这些是系统根据城市热门景点/高德数据筛选的高质量推荐
-   - **空间均匀分布（最重要）**：每个簇有 projection 字段（0=起点, 1=终点）。必须确保全程均匀覆盖：projection 0.0-0.2（起点附近）至少1个 → 0.2-0.4 至少1个 → 0.4-0.6 至少1个 → 0.6-0.8 至少1个 → 0.8-1.0（终点附近）至少1个。**禁止**所有簇的 projection 都集中在某个区间（如全在 0.7-1.0）
-   - 品类匹配：簇的 top_cats 是否匹配用户需求。如果用户找"美食"，不要选 top_cats 中有"购物""休闲娱乐"的簇。优先选 top_cats 中包含目标品类的簇
-   - **检查 top_poi_names**：必须检查每个簇的 top_poi_names，确保这些 POI 名称和品类确实匹配用户需求。如果 top_poi_names 中的名字看起来不像目标品类（如找"美食"但 top_poi_names 是"XXKTV""XX艺术空间"），不要选这个簇
-   - **用户指定地点优先**：如果用户明确提到了某个地名（如"回民街""大唐不夜城"），优先选该地名附近的簇（簇的 name 或 top_poi_names 中包含该地名或其特征的）
-   - 评分和价格：是否符合用户的预算和品质期望
-   - 多样性：避免选品类完全相同的簇（如全是火锅）
-   - num_stops 应等于选中的 cluster_ids 数量（每个簇最多产出一个站）
-5. **build_route** — 用选定的 cluster_ids 构建实际路线。**此步骤不可跳过**，必须拿到真实路线数据后才能开始解说。build_route 的参数 cluster_ids 必须是从 query_clusters 结果中实际出现的 cluster_id。**不要对同一组 cluster_ids 重复调用 build_route（只是换排列顺序不算新参数），这样只会浪费时间和 API 配额**
-6. **路线预览** — build_route 成功返回后，写 2-3 句简洁的路线预览（概述 + 途经站点名 + 总时长），不要写长篇解说。**不要写 Mermaid 图。** 详细解说和可视化将在用户确认路线后由系统自动生成
-
-## 强制工具调用规则（最重要）
-
-**任何出行需求都必须调用工具规划路线。** 即使信息不完整（无起点、无偏好、需求模糊），也必须使用默认值调用工具。**禁止**只输出文字建议而不调工具。
-
-唯一可以只输出文字的情况：
-- 用户不是要规划路线（如纯闲聊、询问系统功能）
-- 用户连城市名都没提供（可以反问一次）
-
-## 极简输入处理规则
-
-如果用户输入极其简短（如"西安 吃"、"北京 玩"），**不要反问用户**。直接使用默认值开始规划：
-- 无起点 → geocode 城市名本身作为起点（即城市中心）
-- 无终点 → 只能设 origin，不设 dest（做起点周边的环线探索）
-- 无关键词 → 用 ["美食", "景点"] 作为默认
-- 无预算 → 用 "medium"
-**唯一例外**：如果用户连城市名都没提供，可以反问一次
-
-## 模糊探索请求处理（重要）
-
-如果用户表达了无明确偏好的探索意图（如"不知道去哪玩"、"随便逛逛"、"推荐一下"、"有什么好玩的"、"想去转转"、"不想去太远的"），你应该：
-
-1. 先用城市名 geocode 获取城市中心坐标
-2. 使用 keywords=["著名景点","必去","热门","美食","景点"] 调用 query_clusters
-3. 系统会自动注入该城市的热门景点推荐（cluster_id=-2, source="famous"）
-4. **优先选择 cluster_id=-2（城市热门景点推荐）和 source="amap" 的簇**
-5. 如果结果中出现了该城市的标志性景点，务必选入路线
-6. 在路线预览中用推荐口吻介绍（如"西安必去的几个地方..."，列出标志性景点名）
-
-## 路线预览要求
-
-build_route 成功后的预览只需包含：
-- **一句话概述**：路线特色
-- **站点列表**：列出各站名称 + 简要说明（每站 1 句）
-- **基本信息**：总耗时、总距离
-- **不要写 Mermaid 图**，也不要说"如果你想调整..."之类的引导语（系统会自动处理）
+## 强制规则（最重要）
+- **并行调用工具**：每轮可同时调用多个工具。geocode 起终点一次调用（用 places 数组），减少轮次
+- **工具预算**：geocode≤2, query_clusters≤2, build_route≤2, 总调用≤6
+- **关键词不要反复重试**：query_clusters 会自动扩展关键词，不需要换词重试
 
 ## 解说数据一致性（极其重要）
+- 预览中每个 POI 名必须是 build_route 返回 stops[].name 的**精确值**
+- 禁止编造不存在的 POI，禁止用常识替换实际路线
+- 数据与需求严重不匹配时如实告知，不造假
 
-预览中提到的每个 POI 名称，**必须是 build_route 返回结果中 stops[].name 的精确值**。禁止：
-- 编造 build_route 返回结果中不存在的 POI 名称
-- 用训练数据中的"常识"替换实际路线（如实际路线是 KTV，不能说成"老字号餐厅"）
+## 多轮对话
+- 约束保留：未被明确推翻的约束继续生效（如改时间不改偏好→偏好保留）
+- 冲突：自相矛盾时友善指出反问；cache 的坐标可复用
+- 始终用中文回复，语气轻松友好，不说「根据算法」「系统显示」
+"""
 
-如果你发现 build_route 返回的 POI 与用户需求严重不匹配，**如实告诉用户**："抱歉！目前在这些区域找不到完全匹配的 POI。要不要试试放宽关键词或预算？" —— 而不要编造假数据。
 
-## 关键词匹配强制规则
-
-1. **最多 2 次 query_clusters**：如果已有 2 次 query_clusters 但 keyword_match 都 < 0.5，**不要再查第三次**。直接用现有结果中最好的簇调用 build_route。第三次留给万能的 美食,景点 兜底搜索
-2. **必须调用 build_route**：只要 query_clusters 返回了簇（哪怕只有 1 个且 keyword_match=0），必须选最好的调用 build_route。**禁止无限重试 query_clusters**。路线预览中如实告诉用户：数据有限，以下是目前找到的最佳选择
-3. **stop 名称合规检查**：build_route 成功后，检查 stop 名称是否明显违反约束。如用户要素食但 stop 含火锅→ 在预览中如实说明
-4. **关键词重试策略**：第 1 次用用户原词 → 第 2 次扩展近义词（素食→健康餐/轻食，健身房→运动/体育，包间→中餐/火锅/海鲜） → 第 3 次用 [美食, 景点] 兜底
-5. **高德补搜优先**：如果 query_clusters 返回中包含 cluster_id=-1 且 source="amap" 的条目，**优先选它**。系统用高德 API 直接搜索的 POI 质量通常比本地 DB 好。特别是用户要素食/轻食/健身房/包间/SPA 等本地 DB 覆盖差的品类时，cluster_id=-1 往往是最准确的
-6. **预算约束优先**：build_route 的 budget 参数必须与用户需求一致。穷游→low，高档→high
-## 多轮对话与冲突解决
-
-如果对话历史中有之前的路线信息，用户的新输入可能是在修改：
-- 终点改变（"去大雁塔"）→ 已 geocode 过的坐标可以复用，不需要重复 geocode
-- 约束改变（"1小时"）→ 以最新为准，调整站点数
-- 偏好升级（"要高档"）→ 合并为新偏好
-- 彻底推翻（"不要这个方案"）→ 完全重新规划
-- 自相矛盾（"便宜"+"米其林"）→ 友善指出，反问用户澄清
-
-**约束保留规则（重要）**：如果用户只修改了部分约束（如只改时间、不改偏好），未被明确推翻的约束应该保留。例如：
-- 上一轮 keywords=["风景","骑行"]，本轮用户说"缩短到2小时"→ 仍用 keywords=["风景","骑行"]
-- 上一轮 budget="low"，本轮用户说"加个拍照的地方" → 仍用 budget="low"
-- 用户说了"不要商场" → 后续所有轮次都应排除商场
-- 只有用户明确推翻时才改变（如"不想看风景了，找吃的"）
-
-## 风格指南
-
-- 语气轻松友好但不油腻，像旅行达人在给朋友建议
-- 不说「根据算法」或「系统显示」之类的词
-- 路线不可行时（工具返回 error），如实告知并给出替代建议
-- 用中文回复
-
-## 重要规则
-
-- **必须调用 build_route**：选定聚簇后，必须调用 build_route 获取真实路线数据，不能凭空编造
-- **query_clusters 最多调 2 次**：如果第一次结果不理想，可以换关键词再试一次。如果 2 次都不够好，就在现有结果中选最好的，不要反复重试
-- **build_route 最多调 2 次**：第一次用初步选的簇，如果结果不理想（如 stops 与用户提到的地方无关），可以换一组簇再试一次。但如果两次都不行，不要反复重试
-- **工具调用总数控制在 6 次以内**：geocode(1-2次) + query_clusters(1-2次) + build_route(1-2次) = 总调用 ≤ 6 次
-- **使用真实数据预览**：预览中的交通方式、耗时必须来自 build_route 返回值
-- **用户明确提到的地名必须出现在路线中**：如果用户说了"去回民街""去大雁塔"，那么该地名对应的 POI 必须作为 stop 或终点出现在最终 stops 中。如果 query_clusters 返回的簇里没有覆盖该地名，要在 build_route 之前先 geocode 该地点，然后用它的坐标调 query_clusters
-- **选 5-8 个簇**：让后续交互式编辑有足够候选 POI。但 num_stops 不要超过 cluster_ids 数量"""
 
 
 
@@ -133,6 +68,14 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
 
     profile_mgr = UserProfileManager(user_id=user_id)
     user_data = profile_mgr.load()
+
+    # ── InputEnricher: resolve defaults before LLM sees user input ──
+    enriched = InputEnricher.enrich(
+        user_input,
+        session_city=session.city or session.default_city or "西安",
+        session_keywords=session.keywords if session.keywords != "美食,景点" else ""
+    )
+    session._last_enriched = enriched  # stash for _build_messages
 
     # 精简 subcategory 显示（只保留最后一段）
     top_cats_short = []
@@ -154,6 +97,28 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
         "city": session.city or "",
     }
 
+    # Inject city from InputEnricher if not already set
+    if not agent_state.get("city"):
+        agent_state["city"] = enriched.city
+    agent_state["_enriched"] = enriched
+
+    # Initialize constraints from session or scratch
+    if session.constraints is None:
+        session.constraints = RouteConstraints()
+
+    # Merge current input
+    round_num = getattr(session, '_round_count', 0) + 1
+    session._round_count = round_num
+    session.constraints = session.constraints.merge(user_input, round_num=round_num)
+
+    # Apply enriched data to fill gaps
+    if enriched.budget_hint and not session.constraints.budget:
+        session.constraints.budget = enriched.budget_hint
+    if enriched.exclusions:
+        for e in enriched.exclusions:
+            if e not in session.constraints.exclusions:
+                session.constraints.exclusions.append(e)
+
     # 如果 session 中已有坐标，提示 LLM 可以跳过 geocode
     if agent_state["origin_coords"] and agent_state["start_name"]:
         _p("📍", f"起点已缓存：{agent_state['start_name']}")
@@ -161,7 +126,7 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
     _p("🤖", "统一 Agent 启动（工具调用模式）")
 
     # 工具调用预算 + 超时保护
-    _BUDGET = {"geocode": 2, "query_clusters": 3, "build_route": 2}
+    _BUDGET = {"geocode": 2, "query_clusters": 2, "build_route": 2}
     _budget_used = {"geocode": 0, "query_clusters": 0, "build_route": 0}
     _start_time = time.time()
     _TIMEOUT = 90  # 秒，超过后强制收束
@@ -292,7 +257,7 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
             narration += f"- {v}\n"
 
     # 从 narration 中提取 mermaid 代码
-    mermaid = _extract_mermaid(narration)
+    narration, mermaid = extract_mermaid_from_text(narration)
 
     # 填充 session 状态
     _finalize_session(session, agent_state, user_input, narration, violations)
@@ -315,14 +280,31 @@ def _build_messages(user_input: str, session: AgentSession, user_data: dict) -> 
     messages = []
 
     # 注入多轮上下文
-    if session.last_user_input and session.city:
+    if session.last_user_input:
         ctx = _build_context(session, user_data)
+        constraint_block = ""
+        if session.constraints and not session.constraints.is_empty():
+            constraint_block = session.constraints.to_prompt_block()
+        
+        conflicts = session.constraints.get_conflicts(user_input) if session.constraints else []
+        conflict_note = ""
+        if conflicts:
+            conflict_note = "⚠️ 约束冲突：" + "; ".join(conflicts) + " → 以本轮输入为准。\n\n"
+        
+        # 注入预处理结果（城市/偏好/排除）
+        enriched = getattr(session, '_last_enriched', None)
+        enriched_prefix = enriched.enriched_text + "\n\n" if enriched else ""
+        
         messages.append({
             "role": "user",
-            "content": f"【之前规划的路线参考】\n{ctx}\n\n【用户新输入】{user_input}\n\n请根据新输入重新规划。如果有冲突，以新输入为准。",
+            "content": f"{enriched_prefix}{constraint_block}\n{conflict_note}## 路线参考\n{ctx}\n\n## 用户输入\n{user_input}\n\n请根据新输入重新规划。冲突以新输入为准。",
         })
     else:
-        messages.append({"role": "user", "content": user_input})
+        enriched = getattr(session, '_last_enriched', None)
+        if enriched:
+            messages.append({"role": "user", "content": f"{enriched.enriched_text}\n\n用户输入：{user_input}"})
+        else:
+            messages.append({"role": "user", "content": user_input})
 
     return messages
 
@@ -366,6 +348,17 @@ def _build_context(session: AgentSession, user_data: dict) -> str:
     except Exception:
         pass
 
+    # Inject structured constraints
+    if session.constraints and not session.constraints.is_empty():
+        c = session.constraints
+        if c.budget:
+            labels = {"low":"低(<40元)", "medium":"中(30-100元)", "high":"高(>80元)"}
+            parts.append(f"约束-预算：{labels.get(c.budget, c.budget)}")
+        if c.dietary:
+            parts.append(f"约束-饮食：{', '.join(c.dietary)}")
+        if c.exclusions:
+            parts.append(f"约束-排除：{', '.join(c.exclusions)}")
+
     return "\n".join(parts)
 
 
@@ -382,11 +375,6 @@ def _brief_input(tool_name: str, inp: dict) -> str:
     return ""
 
 
-def _extract_mermaid(text: str) -> str:
-    """从解说文本中提取 mermaid 代码块."""
-    m = re.search(r"```mermaid\s*\n(.*?)\n```", text, re.DOTALL)
-    return m.group(1).strip() if m else ""
-
 
 def _finalize_session(session: AgentSession, agent_state: dict,
                       user_input: str, narration: str, violations: list = None):
@@ -402,17 +390,27 @@ def _finalize_session(session: AgentSession, agent_state: dict,
         if len(missing) >= len(stop_names) // 2:
             _progress("⚠️", "解说可能未使用真实路线数据")
 
-    # 用户明确提到的地名是否出现在路线中
-    dest_name = agent_state.get("dest_name", "")
-    if dest_name and stop_names:
-        # 检查终点名或其关键词是否出现在 stops 中
-        dest_keywords = [dest_name, dest_name.replace("街", ""), dest_name.replace("路", "")]
-        dest_in_stops = any(
-            any(dk in s or s in dk for dk in dest_keywords)
-            for s in stop_names
-        )
-        if not dest_in_stops and len(dest_name) > 2:
-            _progress("⚠️", f"用户提到的'{dest_name}'未出现在路线stops中")
+    # 用户明确提到的地名是否出现在路线中（优先用 constraints.must_include）
+    must_places = []
+    if hasattr(session, 'constraints') and session.constraints:
+        must_places = list(session.constraints.must_include)
+    if not must_places:
+        dest_name = agent_state.get("dest_name", "")
+        if dest_name and len(dest_name) > 2:
+            # 过滤掉纯城市名（西安/北京等）免得误报
+            _CITY_NAMES = {"西安","北京","上海","成都","杭州","深圳","广州","南京","武汉","重庆","天津","长沙"}
+            if dest_name.rstrip("市") not in _CITY_NAMES:
+                must_places = [dest_name]
+    
+    if must_places and stop_names:
+        for mp in must_places:
+            mp_keywords = [mp, mp.replace("街", ""), mp.replace("路", ""), mp.replace("·","")]
+            found = any(
+                any(dk in s or s in dk for dk in mp_keywords)
+                for s in stop_names
+            )
+            if not found and len(mp) > 2:
+                _progress("⚠️", f"用户提到的'{mp}'未出现在路线stops中")
 
     # 从 geocode 结果中提取地点名和坐标
     oc = agent_state.get("origin_coords")
@@ -507,6 +505,17 @@ def _finalize_session(session: AgentSession, agent_state: dict,
         session.review_score = 4.0
     elif total_stops >= 1:
         session.review_score = 3.0
+
+    # Merge agent_state constraints into session (additive, not overwrite)
+    # session.constraints was already set in run_unified_agent; agent_state may have
+    # additional constraint data from cluster_tools (e.g. enriched keywords/budget)
+    ac = agent_state.get("constraints")
+    if ac and session.constraints:
+        # Only fill in gaps — don't overwrite user-set constraints
+        if not session.constraints.budget and ac.budget:
+            session.constraints.budget = ac.budget
+        if not session.constraints.preferred_categories and ac.preferred_categories:
+            session.constraints.preferred_categories = ac.preferred_categories
 
 
 def _write_output_files(session: AgentSession, narration: str,

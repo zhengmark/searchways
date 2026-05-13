@@ -64,14 +64,16 @@ def _build_poi_dict(poi: dict) -> dict:
     }
 
 
-def search_poi(keywords: str, location: str, radius_km: float = 3, limit: int = 5) -> list:
+def search_poi(keywords: str, location: str, radius_km: float = 3, limit: int = 5, city: str = "西安") -> list:
     """在指定区域搜索 POI，返回 POI dict 列表."""
     _check_key()
     try:
         params = {
             "key": AMAP_API_KEY,
             "keywords": keywords,
-            "city": location,
+            "city": city,
+            "location": location,
+            "radius": int(radius_km * 1000),
             "offset": min(limit, 25),
             "extensions": "all",
         }

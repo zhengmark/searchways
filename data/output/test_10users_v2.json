@@ -1,0 +1,212 @@
+[
+  {
+    "id": "N1_极简输入修复",
+    "desc": "验证 P0-3：极简'西安 吃'不反问直接规划",
+    "user_id": "test_n1_minimal",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安 吃",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 16.1,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N2_品类匹配验证",
+    "desc": "验证 P0-2：美食查询不返回 KTV/艺术空间",
+    "user_id": "test_n2_category",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "从西安南门出发逛吃一天",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.6,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N3_解说脱节修复",
+    "desc": "验证 P0-1：解说中 POI 名与 stops 一致",
+    "user_id": "test_n3_narration",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "从西安北站出发找好吃的小吃",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.4,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N4_坐标系复用",
+    "desc": "验证 P1-2：多轮中复用已缓存的 geocode",
+    "user_id": "test_n4_reuse",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "从曲江出发去大雁塔附近逛逛",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.3,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N5_夜间美食",
+    "desc": "深夜场景 — 品类匹配",
+    "user_id": "test_n5_latenight",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安钟楼附近找能开到凌晨的宵夜",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.6,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N6_情侣约会",
+    "desc": "浪漫路线 — 品类多样性",
+    "user_id": "test_n6_couple",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安约会路线半天，文艺小资风格",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.7,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N7_带老人出游",
+    "desc": "低体力 — 步行少、安静",
+    "user_id": "test_n7_elder",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安陪父母出游，别太累，不要爬楼梯",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.6,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N8_学生穷游",
+    "desc": "低预算 — 免费景点为主",
+    "user_id": "test_n8_student",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安学生穷游一天，越便宜越好",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.4,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N9_商务短途",
+    "desc": "高效 — 1小时快览",
+    "user_id": "test_n9_business",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "从西安高新出发，1小时速览，商务招待客户",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.5,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "N10_雨季室内",
+    "desc": "雨天 — 室内场所为主",
+    "user_id": "test_n10_rainy",
+    "total_rounds": 1,
+    "total_time_s": 0,
+    "avg_score": 0.0,
+    "results": [
+      {
+        "round": 1,
+        "query": "西安下雨天出门，找博物馆和咖啡馆",
+        "error": "'NoneType' object has no attribute 'get'",
+        "elapsed_s": 15.8,
+        "score": 0,
+        "stops": [],
+        "issues": [
+          "'NoneType' object has no attribute 'get'"
+        ]
+      }
+    ]
+  }
+]

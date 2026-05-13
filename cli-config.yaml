@@ -1,0 +1,18 @@
+model:
+  default: "deepseek-v4-pro[1m]"
+  provider: "deepseek-anthropic"
+  context_length: 1048576      # 1M context window
+
+agent:
+  max_turns: 60
+  verbose: false
+  reasoning_effort: "none"
+
+display:
+  compact: false
+  streaming: true
+  skin: default
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true

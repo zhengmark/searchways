@@ -21,7 +21,7 @@ from db.connection import get_conn
 _KEYWORD_TO_SUBCAT = {
     "美食": ["餐饮", "中餐", "火锅", "烧烤", "小吃", "面馆", "日料", "西餐", "海鲜", "串串", "麻辣烫"],
     "咖啡": ["咖啡"],
-    "茶饮": ["茶饮", "茶"],
+    "茶饮": ["茶饮", "茶", "茶艺"],
     "奶茶": ["奶茶", "茶饮"],
     "火锅": ["火锅"],
     "烧烤": ["烧烤", "烤肉"],
@@ -29,32 +29,46 @@ _KEYWORD_TO_SUBCAT = {
     "面馆": ["面馆", "中餐"],
     "粤菜": ["粤菜", "中餐"],
     "川菜": ["川菜", "中餐"],
-    "日料": ["日料", "日本"],
-    "西餐": ["西餐", "牛排", "披萨"],
+    "日料": ["日料", "日本", "日式", "日韩"],
+    "西餐": ["西餐", "牛排", "披萨", "意面", "意大利"],
     "海鲜": ["海鲜"],
     "酒吧": ["酒吧", "酒"],
-    "甜品": ["甜品", "蛋糕", "面包"],
+    "甜品": ["甜品", "蛋糕", "面包", "甜点", "冰激凌", "冰淇淋"],
+    "素食": ["素菜", "素食", "斋"],
+    "轻食": ["轻食", "沙拉", "健康", "简餐"],
+    "清淡": ["素菜", "茶艺", "咖啡", "小吃", "面馆", "简餐", "粤菜"],
+    "宵夜": ["火锅", "烧烤", "小吃", "串串", "麻辣烫", "夜市"],
+    "深夜": ["火锅", "烧烤", "小吃", "酒吧", "串串"],
     "景点": ["风景名胜", "旅游景点", "公园", "寺庙", "博物馆", "景点"],
     "公园": ["公园", "风景名胜"],
     "博物馆": ["博物馆"],
-    "购物": ["购物", "商场", "购物中心", "服装", "专卖", "便利店"],
+    "购物": ["购物", "商场", "购物中心", "服装", "专卖"],
     "商场": ["商场", "购物中心"],
-    "休闲": ["娱乐", "KTV", "影院", "剧场", "棋牌"],
+    "休闲": ["娱乐", "KTV", "影院", "剧场", "密室", "剧本"],
     "KTV": ["KTV"],
     "影院": ["影院", "电影院", "剧场"],
     "图书馆": ["图书馆"],
     "书店": ["书店"],
     "文化": ["文化", "博物馆", "图书馆", "美术馆"],
-    "酒店": ["酒店", "宾馆", "住宿"],
-    "洗浴": ["洗浴", "足疗", "按摩"],
+    "健身房": ["健身", "运动"],
     "运动": ["运动", "健身", "游泳"],
+    "SPA": ["SPA", "水疗"],
+    "按摩": ["按摩", "足疗"],
+    "茶馆": ["茶艺", "茶馆", "茶"],
+    "酒店": ["酒店", "宾馆", "住宿"],
     "夜市": ["夜市", "小吃", "烧烤", "火锅", "串串"],
-    "清真": ["清真", "清真菜馆", "西北", "小吃", "泡馍", "烧烤"],
+    "清真": ["清真", "西北", "小吃", "泡馍", "烧烤"],
     "回民街": ["清真", "泡馍", "小吃", "夜市", "烧烤", "火锅", "串串"],
     "拍照": ["景点", "咖啡", "甜品", "公园", "图书馆"],
     "约会": ["咖啡", "甜品", "景点", "公园", "小吃", "西餐", "日料"],
-    "安静": ["咖啡", "图书馆", "茶馆", "公园", "书店"],
+    "安静": ["咖啡", "图书馆", "茶艺", "公园", "书店"],
     "泡馍": ["泡馍", "西北", "清真", "面馆", "中餐"],
+    "亲子": ["公园", "景点", "博物馆", "游乐", "海洋"],
+    "户外": ["公园", "景点", "风景名胜"],
+    "骑行": ["公园", "景点", "风景名胜"],
+    "免费": ["公园", "景点", "博物馆", "图书馆"],
+    "网红": ["咖啡", "甜品", "景点", "购物"],
+    "夜景": ["景点", "酒吧", "咖啡", "公园"],
 }
 
 # 预算范围
@@ -217,14 +231,13 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
         lng_min, lng_max = origin_lng - lng_span, origin_lng + lng_span
 
     with get_conn() as conn:
-        # 找到走廊 bbox 内的簇
+        # 找到走廊 bbox 内的簇（不设 LIMIT，等过滤后再截断）
         cluster_rows = conn.execute("""
             SELECT cluster_id, center_lat, center_lng, size
             FROM cluster_meta
             WHERE center_lat BETWEEN ? AND ?
               AND center_lng BETWEEN ? AND ?
             ORDER BY size DESC
-            LIMIT 50
         """, (lat_min, lat_max, lng_min, lng_max)).fetchall()
 
         if not cluster_rows:
@@ -303,16 +316,20 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
         avg_price = row["avg_price"]
         avg_rating = row["avg_rating"]
 
-        # 预算过滤
-        if budget and budget in _BUDGET_RANGES and avg_price is not None:
-            lo, hi = _BUDGET_RANGES[budget]
-            if avg_price < lo or avg_price > hi:
-                continue
-
-        # 关键词过滤
+        # 关键词过滤优先（检查 top_cats + all_cats + POI 名称）
         if keywords:
             cluster_names = top_pois.get(cid, [])
+            all_cluster_cats = [c[0].split(";")[-1] if ";" in c[0] else c[0] for c in cats]
             if not _keyword_matches_subcats(keywords, top_cats, cluster_names):
+                if not _keyword_matches_subcats(keywords, all_cluster_cats, cluster_names):
+                    continue
+
+        # 预算过滤（仅对匹配关键词的簇过滤；非餐饮品类跳过预算）
+        _NON_FOOD_KW = {"健身房", "运动", "SPA", "按摩", "密室", "剧本", "书店", "图书馆", "公园", "景点", "博物馆", "KTV"}
+        skip_budget = keywords and any(kw for kw in keywords if any(nf in kw for nf in _NON_FOOD_KW))
+        if budget and budget in _BUDGET_RANGES and avg_price is not None and not skip_budget:
+            lo, hi = _BUDGET_RANGES[budget]
+            if avg_price < lo or avg_price > hi:
                 continue
 
         # 过滤全部品类都是无关杂项的簇
@@ -323,7 +340,19 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
         proj = _project_ratio(center_lat, center_lng,
                               origin_lat, origin_lng,
                               dest_lat or origin_lat, dest_lng or origin_lng)
-
+        
+        # 计算垂距（簇到 OD 中心线的垂直距离，km）
+        perp_dist_km = 0
+        if dest_lat is not None and dest_lng is not None:
+            dx = dest_lat - origin_lat
+            dy = dest_lng - origin_lng
+            line_len = math.sqrt(dx*dx + dy*dy)
+            if line_len > 1e-9:
+                # Cross product / line length → degrees → km
+                cross = abs((center_lng - origin_lng)*dx - (center_lat - origin_lat)*dy)
+                perp_deg = cross / line_len
+                perp_dist_km = perp_deg * 111.32 * math.cos(math.radians((origin_lat + dest_lat)/2))
+        
         # 自动生成簇名称
         cluster_name = _cluster_name(district_by_cluster.get(cid, ""), top_cats, top_pois.get(cid, []))
 
@@ -334,6 +363,7 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
             "center_lng": round(center_lng, 5),
             "dist_from_origin_km": round(dist_km, 1),
             "projection": round(proj, 2),
+            "perp_dist_km": round(perp_dist_km, 1),
             "poi_count": row["cnt"],
             "top_cats": top_cats,
             "avg_rating": round(avg_rating, 1) if avg_rating else None,
@@ -341,9 +371,42 @@ def query_corridor_clusters(origin_lat: float, origin_lng: float,
             "top_poi_names": top_pois.get(cid, []),
         })
 
+    # ── 垂距过滤：只保留在走廊中心线 corridor_width_km 范围内的簇 ──
+    if dest_lat is not None and dest_lng is not None:
+        route_dist = haversine(origin_lat, origin_lng, dest_lat, dest_lng) / 1000.0
+        # Dynamic: shorter routes get narrower corridor
+        max_perp = min(corridor_width_km * 0.7, max(route_dist * 1.5, 1.5))
+        results = [r for r in results if r["perp_dist_km"] <= max_perp]
+    
     # Sort by projection ratio to show even distribution along route
-    results.sort(key=lambda x: x["projection"])
-    return results
+    results.sort(key=lambda x: (x["projection"], x["perp_dist_km"]))
+    
+    # ── Segment-balanced LIMIT: ensure clusters from each projection segment ──
+    # Divide projection range into 5 segments, allocate slots proportionally
+    segments = [[] for _ in range(5)]  # [0-0.2), [0.2-0.4), [0.4-0.6), [0.6-0.8), [0.8-1.0+]
+    for r in results:
+        p = r["projection"]
+        seg_idx = min(4, max(0, int(p * 5)) if p >= 0 else 0)
+        segments[seg_idx].append(r)
+    
+    MAX_TOTAL = 50
+    MIN_PER_SEG = 5
+    # Allocate slots per segment: proportional to count, but min MIN_PER_SEG each
+    seg_counts = [len(s) for s in segments]
+    total_clusters = sum(seg_counts)
+    balanced = []
+    for i in range(5):
+        if seg_counts[i] == 0:
+            continue
+        alloc = max(MIN_PER_SEG, int(seg_counts[i] / max(total_clusters, 1) * MAX_TOTAL))
+        alloc = min(alloc, seg_counts[i])
+        balanced.extend(segments[i][:alloc])
+    
+    # Trim to MAX_TOTAL
+    if len(balanced) > MAX_TOTAL:
+        balanced = balanced[:MAX_TOTAL]
+    
+    return balanced
 
 
 def _cluster_name(district: str, top_cats: list, top_names: list) -> str:

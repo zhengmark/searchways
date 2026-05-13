@@ -3,7 +3,6 @@ import asyncio
 import fcntl
 import json
 import os
-import re
 import sys
 import time
 import threading
@@ -23,7 +22,7 @@ from pydantic import BaseModel, field_validator
 from app.auth import get_current_user_optional
 from app.core.orchestrator import run_multi_agent
 from app.shared import utils as shared_utils
-from app.shared.utils import AgentSession, _build_mermaid_from_path
+from app.shared.utils import AgentSession, _build_mermaid_from_path, extract_mermaid_from_text
 from app.algorithms.graph_planner import build_graph, shortest_path, pre_prune_pois
 from app.algorithms.routing import get_route as routing_get_route, preview_connection
 from app.models import (SelectPoiRequest, ConnectPoiRequest, ReorderRequest,
@@ -152,15 +151,7 @@ class ChatRequest(BaseModel):
 def _build_response(narration_text: str, session: AgentSession, session_id: str) -> dict:
     """从 orchestrator 返回值提取结构化响应."""
     # 分离解说文本和 Mermaid 代码块
-    mermaid = ""
-    narration = narration_text
-    m = re.search(r"```mermaid\s*\n(.*?)\n```", narration_text, re.DOTALL)
-    if m:
-        mermaid = m.group(1).strip()
-        narration = narration_text[:m.start()].strip()
-        trailer = narration_text[m.end():].strip()
-        if trailer:
-            narration += "\n\n" + trailer
+    narration, mermaid = extract_mermaid_from_text(narration_text)
 
     # 构建 stops 列表
     stops = []

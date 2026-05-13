@@ -23,10 +23,11 @@ def normalize_keywords(kw_list: list) -> list:
 
 
 def filter_by_category(pois: list) -> list:
-    """过滤掉品类黑名单中的 POI."""
+    """过滤掉品类黑名单中的 POI（同时检查 category, type, 和 name）."""
     return [
         p for p in pois
-        if not any(b in p.get("category", "") + p.get("type", "") for b in CATEGORY_BLACKLIST)
+        if not any(b in (p.get("category", "") + p.get("type", "") + p.get("name", ""))
+                   for b in CATEGORY_BLACKLIST)
     ]
 
 
