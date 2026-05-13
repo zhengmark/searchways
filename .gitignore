@@ -34,3 +34,13 @@ WEEKLY_REPORT*
 index.js
 package.json
 package-lock.json
+
+# 运行时数据
+data/sessions/
+data/output/
+data/users/
+
+# Hermes Agent 日志
+.hermes/logs/
+.hermes/audio_cache/
+.hermes/voice-memos/
