@@ -1,0 +1,17 @@
+# 全局代码所有者 — 所有 PR 自动请求审查
+* @zhengmark
+
+# 核心算法模块
+app/algorithms/   @zhengmark
+app/core/         @zhengmark
+app/pipeline/     @zhengmark
+
+# 数据层
+db/               @zhengmark
+
+# CI/CD 配置 — 需要额外审查
+.github/workflows/  @zhengmark
+
+# 版本发布相关
+CHANGELOG.md      @zhengmark
+pyproject.toml    @zhengmark
