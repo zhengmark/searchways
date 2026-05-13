@@ -413,8 +413,6 @@ def _brief_input(tool_name: str, inp: dict) -> str:
     return ""
 
 
-
-
 def _align_narration(narration: str, agent_state: dict) -> str:
     """Post-process narration to ensure alignment with actual route data."""
     stops = agent_state.get("stop_names", [])
@@ -429,20 +427,20 @@ def _align_narration(narration: str, agent_state: dict) -> str:
         if stop in text:
             return True
         # Check if a significant part of stop name appears in narration
-        for prefix_len in [max(4, len(stop)*3//4), len(stop)//2, max(3, len(stop)//3)]:
+        for prefix_len in [max(4, len(stop) * 3 // 4), len(stop) // 2, max(3, len(stop) // 3)]:
             prefix = stop[:prefix_len]
             if len(prefix) >= 3 and prefix in text:
                 return True
         # Check if stop contains a long enough substring from narration
         # (handles abbreviations like '老刘家泡馍' for '老刘家泡馍.陕西老字号(...)')
-        stop_parts = stop.replace('.', ' ').replace('(', ' ').replace(')', ' ').split()
+        stop_parts = stop.replace(".", " ").replace("(", " ").replace(")", " ").split()
         # If any 4+ char part of stop appears in narration
         for part in stop_parts:
             if len(part) >= 4 and part in text:
                 return True
         return False
 
-    mentioned = [s for s in stops if _is_mentioned(s, narration)]
+    _mentioned = [s for s in stops if _is_mentioned(s, narration)]
     missing = [s for s in stops if not _is_mentioned(s, narration)]
 
     if missing:
@@ -464,7 +462,7 @@ def _align_narration(narration: str, agent_state: dict) -> str:
         if duration:
             lines.append(f"\n⏱ 总时长约 {duration} 分钟")
         if distance:
-            lines.append(f"📏 总距离约 {distance/1000:.1f} 公里")
+            lines.append(f"📏 总距离约 {distance / 1000:.1f} 公里")
 
         narration = narration.rstrip() + "\n".join(lines)
 
