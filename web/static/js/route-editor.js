@@ -9,7 +9,7 @@
  *  - Confirm → generate narration
  */
 
-import { authFetch, $, formatDuration, renderMarkdown } from './utils.js';
+import { authFetch, $, formatDuration, renderMarkdown, haversineKm } from './utils.js';
 import {
   getMap, initMap, clearLayers, renderStops, renderSegments, renderRecommended, invalidateSize,
   setRecClickCallback,
@@ -134,7 +134,20 @@ function _realToModel(data) {
       perp: p.perpendicular_km || 0,
       match: p.perpendicular_km != null ? Math.max(0, 1 - p.perpendicular_km / 3) : 0.7,
       address: p.address || '',
+      _dist_km: p._aoi_dist_m != null ? p._aoi_dist_m / 1000 : null,
     }));
+
+  // Hard cap: no alternatives >5km from origin (frontend safeguard)
+  const MAX_ALT_DIST_KM = 5.0;
+  if (stops.length > 0) {
+    const origin = stops[0];
+    pool = pool.filter(p => {
+      const d = p._dist_km != null ? p._dist_km : haversineKm(origin.lat, origin.lng, p.lat, p.lng);
+      if (d > MAX_ALT_DIST_KM) return false;
+      p._dist_km = d;
+      return true;
+    });
+  }
 
   // Pick top 5 from each of 5 projection ranges for even spatial distribution
   const projRanges = [
@@ -350,11 +363,11 @@ function _renderSidebar() {
       const rli = document.createElement('li');
       rli.className = 'rec-item';
       const stars = rec.rating ? `⭐${rec.rating} ` : '';
-      const pct = rec.match != null ? `${Math.round(rec.match * 100)}%` : '';
+      const distStr = rec._dist_km != null ? `${rec._dist_km.toFixed(1)}km` : (rec.match != null ? `${Math.round(rec.match * 100)}%` : '');
       rli.innerHTML = `
         <span class="rec-dot" style="background:${_catColor(rec.category)}"></span>
         <span class="rec-name">${stars}${rec.name}</span>
-        <span class="rec-match">${pct}</span>
+        <span class="rec-match">${distStr}</span>
         <button class="rec-add-btn">+ 加入</button>
       `;
       rli.querySelector('.rec-add-btn').onclick = (e) => {
