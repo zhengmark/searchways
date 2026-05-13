@@ -946,6 +946,21 @@ def _execute_tool_impl(tool_name: str, tool_input: dict, agent_state: dict) -> s
                     budget=budget,
                 )
                 agent_state["corridor_data"] = corridor_data
+
+                # AOI filter: for local/no-destination queries, limit corridor_pois to radius around origin
+                from app.pipeline.aoi_filter import filter_adaptive
+
+                if corridor_data and corridor_data.get("corridor_pois"):
+                    oc = agent_state.get("origin_coords")
+                    dc = agent_state.get("dest_coords")
+                    if oc:
+                        corridor_data["corridor_pois"] = filter_adaptive(
+                            corridor_data["corridor_pois"],
+                            oc[0],
+                            oc[1],
+                            dest_lat=dc[0] if dc else None,
+                            dest_lng=dc[1] if dc else None,
+                        )
             except Exception:
                 agent_state["corridor_data"] = {
                     "corridor_pois": [],
