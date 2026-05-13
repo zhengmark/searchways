@@ -1,6 +1,7 @@
 """Unit tests for app.algorithms.geo — haversine distance and projection."""
 
 import pytest
+
 from app.algorithms.geo import haversine, project_ratio
 
 

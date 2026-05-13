@@ -1,6 +1,6 @@
 """属性聚类 — 简化版 KMeans，按评分/价格/品类将 POI 分为相似群组."""
+
 import random
-import math
 
 
 def attr_cluster(pois: list, k: int = 5, max_iters: int = 20) -> list[int]:

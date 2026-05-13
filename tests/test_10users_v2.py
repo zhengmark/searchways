@@ -1,6 +1,10 @@
 """第二轮 10 用户多轮对话测试 — 验证 6 项修复效果."""
-import json, time, sys
-sys.path.insert(0, '.')
+
+import json
+import sys
+import time
+
+sys.path.insert(0, ".")
 from app.core.orchestrator import run_multi_agent
 
 TESTS = [
@@ -97,6 +101,7 @@ TESTS = [
     },
 ]
 
+
 def run_one_test(test):
     uid = test["id"]
     user_id = test["user_id"]
@@ -127,38 +132,48 @@ def run_one_test(test):
 
             score, issues = _rate_detailed(uid, i, query, narration, stops, session, checks)
 
-            results.append({
-                "round": i + 1,
-                "query": query,
-                "narration_preview": narration[:150].replace("\n", " "),
-                "stops": stops,
-                "num_stops": len(stops),
-                "city": session.city or "unknown",
-                "elapsed_s": elapsed,
-                "score": score,
-                "checks": checks,
-                "issues": issues,
-            })
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "narration_preview": narration[:150].replace("\n", " "),
+                    "stops": stops,
+                    "num_stops": len(stops),
+                    "city": session.city or "unknown",
+                    "elapsed_s": elapsed,
+                    "score": score,
+                    "checks": checks,
+                    "issues": issues,
+                }
+            )
             status = "✅" if score >= 3.5 else "⚠️" if score >= 2.0 else "❌"
-            print(f"  {status} R{i+1} {elapsed}s stops={stops} score={score} {' | '.join(issues[:2])}")
+            print(f"  {status} R{i + 1} {elapsed}s stops={stops} score={score} {' | '.join(issues[:2])}")
         except Exception as e:
             elapsed = round(time.time() - t0, 1)
-            results.append({
-                "round": i + 1, "query": query,
-                "error": str(e), "elapsed_s": elapsed, "score": 0,
-                "stops": [], "issues": [str(e)[:60]],
-            })
-            print(f"  ❌ R{i+1} {elapsed}s ERROR: {e}")
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "error": str(e),
+                    "elapsed_s": elapsed,
+                    "score": 0,
+                    "stops": [],
+                    "issues": [str(e)[:60]],
+                }
+            )
+            print(f"  ❌ R{i + 1} {elapsed}s ERROR: {e}")
             break
 
     return {
-        "id": uid, "desc": test["desc"],
+        "id": uid,
+        "desc": test["desc"],
         "user_id": user_id,
         "total_rounds": len(results),
         "total_time_s": total_time,
         "avg_score": round(sum(r["score"] for r in results) / max(len(results), 1), 1),
         "results": results,
     }
+
 
 def _rate_detailed(test_id, round_i, query, narration, stops, session, checks):
     s = 0.0
@@ -187,7 +202,7 @@ def _rate_detailed(test_id, round_i, query, narration, stops, session, checks):
 
     # P0-2: 品类匹配 — 检查返回的 POI 品类
     cats = []
-    for p in (session.all_pois or []):
+    for p in session.all_pois or []:
         cat = p.get("category", "")
         if cat:
             cats.append(cat)
@@ -209,9 +224,10 @@ def _rate_detailed(test_id, round_i, query, narration, stops, session, checks):
 
     return (min(s, 5.0), issues)
 
+
 if __name__ == "__main__":
-    print(f"🚀 第二轮 10 用户测试 — 验证 6 项修复")
-    print(f"{'='*60}")
+    print("🚀 第二轮 10 用户测试 — 验证 6 项修复")
+    print(f"{'=' * 60}")
     all_results = []
     t0_total = time.time()
     success_count = 0
@@ -229,9 +245,9 @@ if __name__ == "__main__":
     total_time = round(time.time() - t0_total, 0)
 
     # ── 汇总 ──
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"📊 汇总 (总耗时 {total_time}s)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     all_scores = []
     all_issues = []
     for r in all_results:
@@ -240,7 +256,9 @@ if __name__ == "__main__":
             for issue in rd.get("issues", []):
                 all_issues.append(f"{r['id']} R{rd['round']}: {issue}")
         status = "✅" if r["avg_score"] >= 3 else "⚠️" if r["avg_score"] >= 2 else "❌"
-        print(f"  {status} {r['id']:22s} | {r['avg_score']:.1f}/5 | {r['total_rounds']}轮 | {r['total_time_s']:.0f}s | {r['desc']}")
+        print(
+            f"  {status} {r['id']:22s} | {r['avg_score']:.1f}/5 | {r['total_rounds']}轮 | {r['total_time_s']:.0f}s | {r['desc']}"
+        )
 
     overall = round(sum(all_scores) / max(len(all_scores), 1), 1)
     print(f"\n  成功率: {success_count}/{len(all_results)}")
@@ -252,4 +270,4 @@ if __name__ == "__main__":
 
     with open("data/output/test_10users_v2.json", "w") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-    print(f"\n📄 详细结果: data/output/test_10users_v2.json")
+    print("\n📄 详细结果: data/output/test_10users_v2.json")

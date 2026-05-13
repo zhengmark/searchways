@@ -3,6 +3,7 @@
 用法:
     python3 tests/test_benchmark.py
 """
+
 import os
 import sys
 import time
@@ -25,7 +26,9 @@ def run_benchmark(query: str, use_db: bool) -> dict:
 
     # 重新导入以应用环境变量
     import importlib
+
     import app.config
+
     importlib.reload(app.config)
 
     from app.core.orchestrator import run_multi_agent
@@ -73,11 +76,11 @@ if __name__ == "__main__":
         amap_r = [r for r in results if r["query"] == q and r["mode"] == "Amap"]
         db_t = db_r[0]["latency_s"] if db_r else 0
         amap_t = amap_r[0]["latency_s"] if amap_r else 0
-        speedup = f"{amap_t/db_t:.1f}x" if db_t > 0 else "N/A"
+        speedup = f"{amap_t / db_t:.1f}x" if db_t > 0 else "N/A"
         print(f"{q:<30} {db_t:>6.1f}s {amap_t:>6.1f}s {speedup:>8}")
 
     # 平均
     db_avg = sum(r["latency_s"] for r in results if r["mode"] == "DB") / len(TEST_QUERIES)
     amap_avg = sum(r["latency_s"] for r in results if r["mode"] == "Amap") / len(TEST_QUERIES)
     print("-" * 60)
-    print(f"{'平均':<30} {db_avg:>6.1f}s {amap_avg:>6.1f}s {amap_avg/db_avg:>7.1f}x")
+    print(f"{'平均':<30} {db_avg:>6.1f}s {amap_avg:>6.1f}s {amap_avg / db_avg:>7.1f}x")

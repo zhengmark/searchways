@@ -1,16 +1,16 @@
 """Unit tests for app.algorithms.graph_planner — planning and path selection."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+
 from app.algorithms.graph_planner import (
-    pre_prune_pois,
     _haversine_fallback,
-    shortest_path,
     _pick_from_segments,
+    pre_prune_pois,
+    shortest_path,
 )
 
-
 # ─── helper: build a simple synthetic graph ────────
+
 
 def _synthetic_graph(n, edge_dist=1000, edge_dur=600):
     """Build an n×n adjacency matrix with known edge values."""
@@ -30,29 +30,34 @@ def _synthetic_nodes(origin_coords, poi_data_list, dest_coords):
     """Build a nodes list matching build_graph output format."""
     nodes = [{"id": 0, "name": "起点", "lat": origin_coords[0], "lng": origin_coords[1], "type": "origin"}]
     for i, p in enumerate(poi_data_list):
-        nodes.append({
-            "id": i + 1,
-            "name": p["name"],
-            "lat": p["lat"],
-            "lng": p["lng"],
-            "type": "poi",
-            "rating": p.get("rating"),
-            "category": p.get("category", ""),
-        })
+        nodes.append(
+            {
+                "id": i + 1,
+                "name": p["name"],
+                "lat": p["lat"],
+                "lng": p["lng"],
+                "type": "poi",
+                "rating": p.get("rating"),
+                "category": p.get("category", ""),
+            }
+        )
     if dest_coords is not None:
-        nodes.append({
-            "id": len(nodes),
-            "name": "终点",
-            "lat": dest_coords[0],
-            "lng": dest_coords[1],
-            "type": "destination",
-        })
+        nodes.append(
+            {
+                "id": len(nodes),
+                "name": "终点",
+                "lat": dest_coords[0],
+                "lng": dest_coords[1],
+                "type": "destination",
+            }
+        )
     return nodes
 
 
 # ═══════════════════════════════════════════════════
 #  pre_prune_pois
 # ═══════════════════════════════════════════════════
+
 
 class TestPrePrunePois:
     """Tests for pre_prune_pois function."""
@@ -144,6 +149,7 @@ class TestPrePrunePois:
 #  _haversine_fallback
 # ═══════════════════════════════════════════════════
 
+
 class TestHaversineFallback:
     """Tests for _haversine_fallback."""
 
@@ -183,6 +189,7 @@ class TestHaversineFallback:
 # ═══════════════════════════════════════════════════
 #  _pick_from_segments
 # ═══════════════════════════════════════════════════
+
 
 class TestPickFromSegments:
     """Tests for _pick_from_segments."""
@@ -266,6 +273,7 @@ class TestPickFromSegments:
 #  shortest_path
 # ═══════════════════════════════════════════════════
 
+
 class TestShortestPath:
     """Tests for shortest_path function."""
 
@@ -308,8 +316,7 @@ class TestShortestPath:
         result = shortest_path(graph, nodes, num_stops=2, budget_level="medium")
 
         # Count POI nodes in path (exclude origin 0 and destination len(nodes)-1)
-        poi_ids = [nid for nid in result["node_ids"]
-                   if nid != 0 and nid != (len(nodes) - 1)]
+        poi_ids = [nid for nid in result["node_ids"] if nid != 0 and nid != (len(nodes) - 1)]
         assert len(poi_ids) <= 2
 
     def test_no_poi_nodes_returns_empty(self):

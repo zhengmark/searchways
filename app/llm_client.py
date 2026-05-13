@@ -20,6 +20,7 @@ def _get_provider() -> LLMProvider:
 
     if provider_name == "anthropic" or "anthropic" in LLM_BASE_URL.lower():
         from app.providers.anthropic_provider import AnthropicProvider
+
         return AnthropicProvider(
             api_key=LLM_API_KEY,
             base_url=LLM_BASE_URL,
@@ -29,6 +30,7 @@ def _get_provider() -> LLMProvider:
     # Future: add more providers here (openai, etc.)
     # Fallback to Anthropic
     from app.providers.anthropic_provider import AnthropicProvider
+
     return AnthropicProvider(
         api_key=LLM_API_KEY,
         base_url=LLM_BASE_URL,
@@ -51,13 +53,13 @@ def _ensure_provider() -> LLMProvider:
 # Public API — backward-compatible with existing callers
 # ---------------------------------------------------------------------------
 
+
 def call_llm(messages: list, system: str = None, max_tokens: int = 4096) -> dict:
     """Call the LLM API and return the response dict. All agents use this."""
     return _ensure_provider().chat(messages, system=system, max_tokens=max_tokens)
 
 
-def call_llm_with_tools(messages: list, tools: list, system: str = None,
-                        max_tokens: int = 4096) -> dict:
+def call_llm_with_tools(messages: list, tools: list, system: str = None, max_tokens: int = 4096) -> dict:
     """Call LLM with tool definitions. Returns full response (may contain tool_use blocks).
 
     Args:
@@ -70,7 +72,10 @@ def call_llm_with_tools(messages: list, tools: list, system: str = None,
         Full API response dict. Check content blocks for "tool_use" type.
     """
     return _ensure_provider().chat_with_tools(
-        messages, tools, system=system, max_tokens=max_tokens,
+        messages,
+        tools,
+        system=system,
+        max_tokens=max_tokens,
     )
 
 

@@ -4,16 +4,35 @@ from app.algorithms.geo import haversine
 
 # 关键词 → 用户可读描述
 _KW_DESCRIPTIONS = {
-    "美食": "美食探索", "小吃": "地道小吃", "火锅": "火锅爱好者",
-    "烧烤": "烧烤达人", "咖啡": "咖啡时光", "茶饮": "茶饮爱好者",
-    "奶茶": "奶茶控", "甜品": "甜品控", "日料": "日料爱好者",
-    "西餐": "西餐体验", "海鲜": "海鲜盛宴", "酒吧": "微醺时刻",
-    "景点": "景点打卡", "公园": "公园漫步", "博物馆": "文化探索",
-    "购物": "购物达人", "商场": "购物体验", "书店": "阅读时光",
-    "图书馆": "安静阅读", "约会": "约会圣地", "拍照": "拍照出片",
-    "安静": "静谧时光", "亲子": "亲子友好", "清真": "清真美食",
-    "夜市": "夜市寻味", "面馆": "面食之旅", "泡馍": "泡馍体验",
-    "穷游": "实惠之选", "带孩子": "亲子时光",
+    "美食": "美食探索",
+    "小吃": "地道小吃",
+    "火锅": "火锅爱好者",
+    "烧烤": "烧烤达人",
+    "咖啡": "咖啡时光",
+    "茶饮": "茶饮爱好者",
+    "奶茶": "奶茶控",
+    "甜品": "甜品控",
+    "日料": "日料爱好者",
+    "西餐": "西餐体验",
+    "海鲜": "海鲜盛宴",
+    "酒吧": "微醺时刻",
+    "景点": "景点打卡",
+    "公园": "公园漫步",
+    "博物馆": "文化探索",
+    "购物": "购物达人",
+    "商场": "购物体验",
+    "书店": "阅读时光",
+    "图书馆": "安静阅读",
+    "约会": "约会圣地",
+    "拍照": "拍照出片",
+    "安静": "静谧时光",
+    "亲子": "亲子友好",
+    "清真": "清真美食",
+    "夜市": "夜市寻味",
+    "面馆": "面食之旅",
+    "泡馍": "泡馍体验",
+    "穷游": "实惠之选",
+    "带孩子": "亲子时光",
 }
 
 # 预算描述
@@ -22,6 +41,7 @@ _BUDGET_DESCRIPTIONS = {
     "medium": "在您的中等预算范围内",
     "high": "符合您的高端体验需求",
 }
+
 
 # 距离评价
 def _distance_eval(dist_km: float) -> str:
@@ -34,9 +54,9 @@ def _distance_eval(dist_km: float) -> str:
     return "位于路线后半段"
 
 
-def generate_poi_reasons(poi: dict, keywords: list[str], budget: str,
-                         origin_coords: tuple | None = None,
-                         user_profile: dict | None = None) -> dict[str, str]:
+def generate_poi_reasons(
+    poi: dict, keywords: list[str], budget: str, origin_coords: tuple | None = None, user_profile: dict | None = None
+) -> dict[str, str]:
     """为一个 POI 生成两部分推荐理由.
 
     Returns:
@@ -71,13 +91,12 @@ def _structured_reason(poi: dict, origin_coords: tuple | None) -> str:
         poi_lng = poi.get("lng")
         if poi_lat is not None and poi_lng is not None:
             dist = haversine(origin_coords[0], origin_coords[1], poi_lat, poi_lng)
-            parts.append(f"距起点{dist/1000:.1f}km")
+            parts.append(f"距起点{dist / 1000:.1f}km")
 
     return " | ".join(parts) if parts else ""
 
 
-def _user_need_reason(poi: dict, keywords: list[str], budget: str,
-                      origin_coords: tuple | None) -> str:
+def _user_need_reason(poi: dict, keywords: list[str], budget: str, origin_coords: tuple | None) -> str:
     """用户需求匹配理由：为什么这个 POI 适合你."""
     reasons = []
 

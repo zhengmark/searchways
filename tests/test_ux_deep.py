@@ -1,47 +1,56 @@
 """多用户画像深度体验测试 — 5种不同类型用户"""
-import sys, time, json
+
+import sys
+import time
+
 sys.path.insert(0, ".")
-from app.shared.utils import AgentSession
 from app.core.orchestrator import run_multi_agent as run_agent
+from app.shared.utils import AgentSession
 
 SCENARIOS = [
     {
-        "id": "A", "persona": "👨‍👩‍👧 带娃家庭",
+        "id": "A",
+        "persona": "👨‍👩‍👧 带娃家庭",
         "desc": "周末想带孩子出去玩，既要有公园又要有亲子餐厅",
         "input": "周六带5岁孩子去北京朝阳公园附近，找个公园和2个适合带娃吃饭的地方",
         "city": "北京",
     },
     {
-        "id": "B", "persona": "💑 约会规划师",
+        "id": "B",
+        "persona": "💑 约会规划师",
         "desc": "在外滩找浪漫餐厅和看夜景的地方",
         "input": "从上海外滩出发，找2个氛围好的约会餐厅，最后去一个看夜景的地方",
         "city": "上海",
     },
     {
-        "id": "C", "persona": "🏃 暴走打卡族",
+        "id": "C",
+        "persona": "🏃 暴走打卡族",
         "desc": "一天暴走5个打卡点",
         "input": "从西安钟楼出发，去大雁塔，路上安排5个吃喝拍照打卡的地方",
         "city": "西安",
     },
     {
-        "id": "D", "persona": "🤷 极简输入",
+        "id": "D",
+        "persona": "🤷 极简输入",
         "desc": "只说两个字，看系统如何应对",
         "input": "北京 吃",
         "city": "北京",
     },
     {
-        "id": "E", "persona": "🌃 深夜觅食者",
+        "id": "E",
+        "persona": "🌃 深夜觅食者",
         "desc": "晚上11点找还开着的小吃",
         "input": "晚上11点从西安回民街出发，想找3个深夜还开的小吃宵夜",
         "city": "西安",
     },
 ]
 
+
 def run_one(sc):
-    print(f"\n╔{'═'*58}╗")
+    print(f"\n╔{'═' * 58}╗")
     print(f"║  {sc['persona']}: {sc['desc']}                    ║")
-    print(f"╚{'═'*58}╝")
-    print(f"  📝 输入: \"{sc['input']}\"")
+    print(f"╚{'═' * 58}╝")
+    print(f'  📝 输入: "{sc["input"]}"')
 
     session = AgentSession()
     session.default_city = sc["city"]
@@ -106,7 +115,7 @@ def run_one(sc):
         score += 5
         notes.append(f"✅ 起点({session.start_name})未入选POI")
     elif session.start_name in stops:
-        notes.append(f"⚠️ 起点出现在POI列表中")
+        notes.append("⚠️ 起点出现在POI列表中")
 
     if session.dest_name:
         notes.append(f"🏁 终点: {session.dest_name}")
@@ -125,12 +134,13 @@ def run_one(sc):
     # 上限100
     score = min(score, 100) if ok else 0
 
-    print(f"  ═══ 体验报告 ═══")
+    print("  ═══ 体验报告 ═══")
     print(f"  得分: {score}/100 {'✅' if score >= 60 else '⚠️' if score >= 30 else '❌'}")
     for n in notes:
         print(f"  {n}")
 
     return {"id": sc["id"], "persona": sc["persona"], "score": score, "notes": notes, "ok": ok}
+
 
 if __name__ == "__main__":
     results = []
@@ -138,9 +148,9 @@ if __name__ == "__main__":
         r = run_one(sc)
         results.append(r)
 
-    print(f"\n{'='*60}")
-    print(f"                      总 览")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("                      总 览")
+    print(f"{'=' * 60}")
     for r in results:
         icon = "✅" if r["score"] >= 60 else "⚠️" if r["score"] >= 30 else "❌"
         print(f"  {icon} {r['persona']}: {r['score']}/100")

@@ -11,14 +11,15 @@
 运行: python3 tests/test_phase5_eval.py
 """
 
-import json, time, sys, uuid
-sys.path.insert(0, '.')
+import sys
+import time
+import uuid
+
+sys.path.insert(0, ".")
 
 from app.core.orchestrator import run_multi_agent
-from app.shared.utils import AgentSession
-from web.server import (_save_session, _load_sessions,
-                        _rebuild_route, _build_stop_list,
-                        sessions as web_sessions)
+from web.server import _load_sessions, _rebuild_route, _save_session
+from web.server import sessions as web_sessions
 
 OUTPUT_DIR = "data/output"
 REPORT_PATH = f"{OUTPUT_DIR}/eval_report_phase5.md"
@@ -71,22 +72,54 @@ PERSONAS = {
 }
 
 TESTS = [
-    {"id": "U1_肉食派",  "user_id": "u1_meat",    "persona": "肉食派",
-     "query": "从丈八六路出发去钟楼，想吃火锅和烧烤，无辣不欢"},
-    {"id": "U2_养生派",  "user_id": "u2_health",  "persona": "养生派",
-     "query": "从大雁塔出发，找清淡的素食餐厅，人均不超过50"},
-    {"id": "U3_亲子派",  "user_id": "u3_kid",     "persona": "亲子派",
-     "query": "周末带5岁女儿从曲江出发玩半天，要户外能跑跳的地方，吃面条"},
-    {"id": "U4_文艺派",  "user_id": "u4_artsy",   "persona": "文艺派",
-     "query": "从小寨出发探店，想找好看的咖啡店甜品店书店，拍照发朋友圈"},
-    {"id": "U5_商务派",  "user_id": "u5_biz",     "persona": "商务派",
-     "query": "今晚在西安高新请3个重要客户吃饭，要高档中餐包间，人均200以上"},
-    {"id": "U6_穷游派",  "user_id": "u6_budget",  "persona": "穷游派",
-     "query": "西安穷游一日，从北站出发，免费景点+便宜小吃，人均不超过30"},
-    {"id": "U7_银发派",  "user_id": "u7_elder",   "persona": "银发派",
-     "query": "从环城公园出发，腿脚不好走不远，找能喝茶下棋的好去处"},
-    {"id": "U8_健身派",  "user_id": "u8_fit",     "persona": "健身派",
-     "query": "从丈八六路出发找健康餐，高蛋白低碳水，吃完去健身房"},
+    {
+        "id": "U1_肉食派",
+        "user_id": "u1_meat",
+        "persona": "肉食派",
+        "query": "从丈八六路出发去钟楼，想吃火锅和烧烤，无辣不欢",
+    },
+    {
+        "id": "U2_养生派",
+        "user_id": "u2_health",
+        "persona": "养生派",
+        "query": "从大雁塔出发，找清淡的素食餐厅，人均不超过50",
+    },
+    {
+        "id": "U3_亲子派",
+        "user_id": "u3_kid",
+        "persona": "亲子派",
+        "query": "周末带5岁女儿从曲江出发玩半天，要户外能跑跳的地方，吃面条",
+    },
+    {
+        "id": "U4_文艺派",
+        "user_id": "u4_artsy",
+        "persona": "文艺派",
+        "query": "从小寨出发探店，想找好看的咖啡店甜品店书店，拍照发朋友圈",
+    },
+    {
+        "id": "U5_商务派",
+        "user_id": "u5_biz",
+        "persona": "商务派",
+        "query": "今晚在西安高新请3个重要客户吃饭，要高档中餐包间，人均200以上",
+    },
+    {
+        "id": "U6_穷游派",
+        "user_id": "u6_budget",
+        "persona": "穷游派",
+        "query": "西安穷游一日，从北站出发，免费景点+便宜小吃，人均不超过30",
+    },
+    {
+        "id": "U7_银发派",
+        "user_id": "u7_elder",
+        "persona": "银发派",
+        "query": "从环城公园出发，腿脚不好走不远，找能喝茶下棋的好去处",
+    },
+    {
+        "id": "U8_健身派",
+        "user_id": "u8_fit",
+        "persona": "健身派",
+        "query": "从丈八六路出发找健康餐，高蛋白低碳水，吃完去健身房",
+    },
 ]
 
 
@@ -96,7 +129,7 @@ def _score_constraints(session, persona):
     constraints = p.get("constraints", {})
     stops = session.stop_names or []
     all_pois = session.all_pois or []
-    narration = getattr(session, 'last_user_input', '')
+    narration = getattr(session, "last_user_input", "")
     score = 5
     reasons = []
 
@@ -244,6 +277,7 @@ def _score_editing(session):
     # 测试 confirm
     try:
         from app.core.narrator_agent import run_confirmation_narrator
+
         narration = run_confirmation_narrator(session, user_input="test")
         if narration.get("narration") and narration.get("mermaid"):
             details.append(f"confirm 成功: {len(narration['narration'])}字解说")
@@ -265,8 +299,15 @@ def _score_persistence(session, sid):
         _save_session(sid, session)
         restored = _load_sessions().get(sid)
         if restored:
-            checks = ["city", "start_name", "dest_name", "stop_names",
-                      "corridor_pois", "selected_poi_ids", "route_confirmed"]
+            checks = [
+                "city",
+                "start_name",
+                "dest_name",
+                "stop_names",
+                "corridor_pois",
+                "selected_poi_ids",
+                "route_confirmed",
+            ]
             fails = []
             for k in checks:
                 orig = getattr(session, k, None)
@@ -304,8 +345,8 @@ def run_eval():
         persona = test["persona"]
         query = test["query"]
         p_info = PERSONAS[persona]
-        print(f"\n{'─'*60}")
-        print(f"[{i+1}/8] {tid} | {p_info['desc'][:50]}")
+        print(f"\n{'─' * 60}")
+        print(f"[{i + 1}/8] {tid} | {p_info['desc'][:50]}")
         print(f"    Query: {query[:80]}")
         t0 = time.time()
 
@@ -333,26 +374,41 @@ def run_eval():
         print(f"    约束:{s1}/5  交通:{s2}/5  走廊:{s3}/5  违规检测:{s4}/5  编辑:{s5}/5  持久化:{s6}/5")
         print(f"    总评: {total}/5 | 耗时: {elapsed:.0f}s | Stops: {session.stop_names}")
 
-        results.append({
-            "id": tid, "persona": persona, "user_id": uid,
-            "query": query, "elapsed_s": round(elapsed, 1),
-            "stops": session.stop_names,
-            "total_duration_min": session.path_result.get("total_duration_min", 0) if session.path_result else 0,
-            "total_distance_m": session.path_result.get("total_distance", 0) if session.path_result else 0,
-            "transport_modes": list(set(s.get("transport", "") for s in (session.path_result or {}).get("segments", []))),
-            "n_corridor_pois": len(session.corridor_pois),
-            "n_corridor_clusters": len(session.corridor_clusters),
-            "n_violations": len(session.violations),
-            "scores": {
-                "constraints": s1, "transport": s2, "corridor": s3,
-                "violations": s4, "editing": s5, "persistence": s6,
-                "total": total,
-            },
-            "details": {
-                "constraints": d1, "transport": d2, "corridor": d3,
-                "violations": d4, "editing": d5, "persistence": d6,
-            },
-        })
+        results.append(
+            {
+                "id": tid,
+                "persona": persona,
+                "user_id": uid,
+                "query": query,
+                "elapsed_s": round(elapsed, 1),
+                "stops": session.stop_names,
+                "total_duration_min": session.path_result.get("total_duration_min", 0) if session.path_result else 0,
+                "total_distance_m": session.path_result.get("total_distance", 0) if session.path_result else 0,
+                "transport_modes": list(
+                    set(s.get("transport", "") for s in (session.path_result or {}).get("segments", []))
+                ),
+                "n_corridor_pois": len(session.corridor_pois),
+                "n_corridor_clusters": len(session.corridor_clusters),
+                "n_violations": len(session.violations),
+                "scores": {
+                    "constraints": s1,
+                    "transport": s2,
+                    "corridor": s3,
+                    "violations": s4,
+                    "editing": s5,
+                    "persistence": s6,
+                    "total": total,
+                },
+                "details": {
+                    "constraints": d1,
+                    "transport": d2,
+                    "corridor": d3,
+                    "violations": d4,
+                    "editing": d5,
+                    "persistence": d6,
+                },
+            }
+        )
 
         time.sleep(1)  # API rate limiting
 
@@ -361,7 +417,7 @@ def run_eval():
     # ═════════════════════════════════════════════
     # 生成报告
     # ═════════════════════════════════════════════
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("生成评测报告...")
 
     avg_total = sum(r["scores"]["total"] for r in results) / max(len(results), 1)
@@ -388,9 +444,7 @@ def run_eval():
     ]
     for r in results:
         p = PERSONAS.get(r["persona"], {})
-        report_lines.append(
-            f"| {r['id']} | {r['persona']} | {p.get('desc', '')[:40]} | {r['query'][:50]}... |"
-        )
+        report_lines.append(f"| {r['id']} | {r['persona']} | {p.get('desc', '')[:40]} | {r['query'][:50]}... |")
 
     report_lines += [
         "",
@@ -409,8 +463,8 @@ def run_eval():
         "",
         "## 二、评测结果汇总",
         "",
-        f"| 维度 | 均分 | 评级 |",
-        f"|------|------|------|",
+        "| 维度 | 均分 | 评级 |",
+        "|------|------|------|",
         f"| A 约束满足 | {avg_constraints:.1f}/5 | {'🟢' if avg_constraints >= 4 else '🟡' if avg_constraints >= 3 else '🔴'} |",
         f"| B 交通多样性 | {avg_transport:.1f}/5 | {'🟢' if avg_transport >= 4 else '🟡' if avg_transport >= 3 else '🔴'} |",
         f"| C 走廊完整性 | {avg_corridor:.1f}/5 | {'🟢' if avg_corridor >= 4 else '🟡' if avg_corridor >= 3 else '🔴'} |",
@@ -454,7 +508,7 @@ def run_eval():
         "",
         "## 四、分维度分析",
         "",
-        "### A) 约束满足 (均分 {:.1f}/5)".format(avg_constraints),
+        f"### A) 约束满足 (均分 {avg_constraints:.1f}/5)",
         "",
     ]
     # Group by constraint issues
@@ -470,7 +524,7 @@ def run_eval():
 
     report_lines += [
         "",
-        "### B) 交通多样性 (均分 {:.1f}/5)".format(avg_transport),
+        f"### B) 交通多样性 (均分 {avg_transport:.1f}/5)",
         "",
     ]
     mode_counts = {}
@@ -488,7 +542,7 @@ def run_eval():
 
     report_lines += [
         "",
-        "### C) 走廊数据完整性 (均分 {:.1f}/5)".format(avg_corridor),
+        f"### C) 走廊数据完整性 (均分 {avg_corridor:.1f}/5)",
         "",
     ]
     no_corridor = [r for r in results if r["n_corridor_pois"] == 0]
@@ -499,7 +553,7 @@ def run_eval():
 
     report_lines += [
         "",
-        "### D) 违规检测 (均分 {:.1f}/5)".format(avg_violations),
+        f"### D) 违规检测 (均分 {avg_violations:.1f}/5)",
         "",
     ]
     with_violations = [r for r in results if r["n_violations"] > 0]
@@ -512,7 +566,7 @@ def run_eval():
 
     report_lines += [
         "",
-        "### E) 交互编辑 (均分 {:.1f}/5)".format(avg_editing),
+        f"### E) 交互编辑 (均分 {avg_editing:.1f}/5)",
         "",
         "测试了 select → rebuild → remove → rebuild → confirm 流程。",
     ]
@@ -523,7 +577,7 @@ def run_eval():
 
     report_lines += [
         "",
-        "### F) 会话持久化 (均分 {:.1f}/5)".format(avg_persistence),
+        f"### F) 会话持久化 (均分 {avg_persistence:.1f}/5)",
         "",
         "测试了 JSON 序列化/反序列化 + 7 个关键字段一致性。",
     ]
@@ -541,7 +595,9 @@ def run_eval():
     if avg_transport < 4:
         report_lines.append(f"- **交通多样性**: 当前 {avg_transport:.1f}/5，检查 graph_planner 距离阈值")
     if avg_corridor < 4:
-        report_lines.append(f"- **走廊数据**: 当前 {avg_corridor:.1f}/5，确认 build_corridor 在 tool_build_route 中调用")
+        report_lines.append(
+            f"- **走廊数据**: 当前 {avg_corridor:.1f}/5，确认 build_corridor 在 tool_build_route 中调用"
+        )
     if avg_editing < 4:
         report_lines.append(f"- **交互编辑**: 当前 {avg_editing:.1f}/5，检查 _rebuild_route 逻辑")
 
@@ -549,20 +605,21 @@ def run_eval():
         "",
         "---",
         "",
-        f"*报告自动生成于 2026-05-09 | 测试框架: tests/test_phase5_eval.py*",
+        "*报告自动生成于 2026-05-09 | 测试框架: tests/test_phase5_eval.py*",
     ]
 
     report = "\n".join(report_lines)
 
     # 写入文件
     import os
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
         f.write(report)
 
     # 控制台摘要
-    print(f"\n{'='*70}")
-    print(f"评测完成！")
+    print(f"\n{'=' * 70}")
+    print("评测完成！")
     print(f"  综合均分: {avg_total:.1f}/5")
     print(f"  约束满足: {avg_constraints:.1f}/5")
     print(f"  交通多样性: {avg_transport:.1f}/5")
@@ -571,7 +628,7 @@ def run_eval():
     print(f"  交互编辑: {avg_editing:.1f}/5")
     print(f"  会话持久化: {avg_persistence:.1f}/5")
     print(f"  报告: {REPORT_PATH}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
 
 if __name__ == "__main__":

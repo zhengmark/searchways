@@ -1,10 +1,12 @@
 """多路召回 — 地理簇 + 品类 + 高评分 + 双端点 四路召回候选 POI."""
+
 from app.algorithms.geo import haversine
 from app.clustering.geo_cluster import find_nearest_cluster
 
 
-def recall_by_geo_cluster(lat: float, lng: float, clusters: list[dict],
-                          radius_m: float = 5000, top_k: int = 30) -> list:
+def recall_by_geo_cluster(
+    lat: float, lng: float, clusters: list[dict], radius_m: float = 5000, top_k: int = 30
+) -> list:
     """从最近的地理簇召回候选 POI."""
     cluster = find_nearest_cluster(lat, lng, clusters)
     if not cluster:
@@ -38,16 +40,13 @@ def recall_by_category(pois: list, target_categories: list, top_k: int = 30) -> 
 def recall_by_rating(pois: list, min_rating: float = 4.0, top_k: int = 20) -> list:
     """高评分召回."""
     candidates = [
-        {**p, "_recall_score": (p.get("rating") or 0) / 5.0}
-        for p in pois
-        if (p.get("rating") or 0) >= min_rating
+        {**p, "_recall_score": (p.get("rating") or 0) / 5.0} for p in pois if (p.get("rating") or 0) >= min_rating
     ]
     candidates.sort(key=lambda x: -x["_recall_score"])
     return candidates[:top_k]
 
 
-def recall_by_bbox(pois: list, lat: float, lng: float,
-                   radius_m: float = 5000, top_k: int = 20) -> list:
+def recall_by_bbox(pois: list, lat: float, lng: float, radius_m: float = 5000, top_k: int = 20) -> list:
     """按距离召回（纯 Haversine，不依赖预计算簇）."""
     candidates = []
     for p in pois:
@@ -58,11 +57,17 @@ def recall_by_bbox(pois: list, lat: float, lng: float,
     return candidates[:top_k]
 
 
-def multi_recall(pois: list, o_lat: float, o_lng: float,
-                 d_lat: float = None, d_lng: float = None,
-                 clusters: list[dict] = None,
-                 target_categories: list = None,
-                 radius_m: float = 5000, total_k: int = 50) -> list:
+def multi_recall(
+    pois: list,
+    o_lat: float,
+    o_lng: float,
+    d_lat: float = None,
+    d_lng: float = None,
+    clusters: list[dict] = None,
+    target_categories: list = None,
+    radius_m: float = 5000,
+    total_k: int = 50,
+) -> list:
     """多路召回 + 合并去重.
 
     四路召回:

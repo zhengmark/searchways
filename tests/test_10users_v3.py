@@ -1,6 +1,10 @@
 """第三轮 10 用户测试 — 验证约束保留 + 品类匹配 + 解说一致性."""
-import json, time, sys
-sys.path.insert(0, '.')
+
+import json
+import sys
+import time
+
+sys.path.insert(0, ".")
 from app.core.orchestrator import run_multi_agent
 
 TESTS = [
@@ -97,6 +101,7 @@ TESTS = [
     },
 ]
 
+
 def run_one_test(test):
     uid = test["id"]
     user_id = test["user_id"]
@@ -114,8 +119,15 @@ def run_one_test(test):
             stops = session.stop_names or []
 
             # 检测约束保留
-            curr_kw = getattr(session, 'keywords', None)
-            kw_preserved = (prev_keywords is None or curr_kw is None or any(k in str(curr_kw).lower() for k in (prev_keywords if isinstance(prev_keywords, list) else [prev_keywords])))
+            curr_kw = getattr(session, "keywords", None)
+            kw_preserved = (
+                prev_keywords is None
+                or curr_kw is None
+                or any(
+                    k in str(curr_kw).lower()
+                    for k in (prev_keywords if isinstance(prev_keywords, list) else [prev_keywords])
+                )
+            )
 
             # 检测解说一致性
             stops_in_narr = [s for s in stops if s in narration]
@@ -123,43 +135,56 @@ def run_one_test(test):
 
             # 检测品类(粗略)
             cats = set()
-            for p in (session.all_pois or []):
+            for p in session.all_pois or []:
                 c = p.get("category", "")
-                if c: cats.add(c)
+                if c:
+                    cats.add(c)
             diverse = len(cats) >= 2
 
             score, issues = _rate(uid, query, narration, stops, session, elapsed, kw_preserved, narr_ok, diverse)
 
-            results.append({
-                "round": i + 1, "query": query,
-                "narration_preview": narration[:180].replace("\n", " "),
-                "stops": stops, "num_stops": len(stops),
-                "city": session.city or "unknown",
-                "elapsed_s": elapsed, "score": score,
-                "checks": {"kw_preserved": kw_preserved, "narr_ok": narr_ok, "diverse": diverse},
-                "issues": issues,
-            })
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "narration_preview": narration[:180].replace("\n", " "),
+                    "stops": stops,
+                    "num_stops": len(stops),
+                    "city": session.city or "unknown",
+                    "elapsed_s": elapsed,
+                    "score": score,
+                    "checks": {"kw_preserved": kw_preserved, "narr_ok": narr_ok, "diverse": diverse},
+                    "issues": issues,
+                }
+            )
             prev_keywords = curr_kw
 
             status = "✅" if score >= 4 else "⚠️" if score >= 2.5 else "❌"
-            print(f"  {status} R{i+1} {elapsed}s stops={stops[:3]} score={score}/5")
+            print(f"  {status} R{i + 1} {elapsed}s stops={stops[:3]} score={score}/5")
             if issues:
                 print(f"       issues: {'; '.join(issues)}")
         except Exception as e:
             elapsed = round(time.time() - t0, 1)
-            results.append({
-                "round": i + 1, "query": query,
-                "error": str(e)[:100], "elapsed_s": elapsed, "score": 0,
-            })
-            print(f"  ❌ R{i+1} {elapsed}s {e}")
+            results.append(
+                {
+                    "round": i + 1,
+                    "query": query,
+                    "error": str(e)[:100],
+                    "elapsed_s": elapsed,
+                    "score": 0,
+                }
+            )
+            print(f"  ❌ R{i + 1} {elapsed}s {e}")
 
     return {
-        "id": uid, "desc": test["desc"],
+        "id": uid,
+        "desc": test["desc"],
         "total_rounds": len(results),
         "total_time_s": total_time,
         "avg_score": round(sum(r["score"] for r in results) / max(len(results), 1), 1),
         "results": results,
     }
+
 
 def _rate(uid, query, narration, stops, session, elapsed, kw_preserved, narr_ok, diverse):
     s = 0.0
@@ -205,9 +230,10 @@ def _rate(uid, query, narration, stops, session, elapsed, kw_preserved, narr_ok,
 
     return (min(s, 5.0), issues)
 
+
 if __name__ == "__main__":
-    print(f"🚀 第三轮 10 用户测试 (全修复后)")
-    print(f"{'='*60}")
+    print("🚀 第三轮 10 用户测试 (全修复后)")
+    print(f"{'=' * 60}")
     all_results = []
 
     for i, test in enumerate(TESTS):
@@ -219,9 +245,9 @@ if __name__ == "__main__":
         print(f"  => {status} 均分: {r['avg_score']}/5 | {r['total_time_s']:.0f}s\n")
 
     # ── 报告 ──
-    print(f"{'='*60}")
-    print(f"📊 汇总报告")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
+    print("📊 汇总报告")
+    print(f"{'=' * 60}")
     scores = []
     for r in all_results:
         s = r["avg_score"]
@@ -243,5 +269,13 @@ if __name__ == "__main__":
     print(f"  ✅ {ok} 良好  ⚠️ {warn} 一般  ❌ {fail} 差")
 
     with open("data/output/test_10users_v3.json", "w") as f:
-        json.dump({"summary": {"overall": overall, "scores": scores, "ok": ok, "warn": warn, "fail": fail}, "results": all_results}, f, ensure_ascii=False, indent=2)
-    print(f"\n📄 详细: data/output/test_10users_v3.json")
+        json.dump(
+            {
+                "summary": {"overall": overall, "scores": scores, "ok": ok, "warn": warn, "fail": fail},
+                "results": all_results,
+            },
+            f,
+            ensure_ascii=False,
+            indent=2,
+        )
+    print("\n📄 详细: data/output/test_10users_v3.json")

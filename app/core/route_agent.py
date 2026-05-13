@@ -6,13 +6,19 @@
 import json
 import time
 
-from app.llm_client import call_llm_with_tools, tool_result_message, extract_text, extract_tool_uses
+from app.core.constraint_model import RouteConstraints
+from app.llm_client import call_llm_with_tools, extract_text, extract_tool_uses
 from app.pipeline.cluster_tools import TOOL_DEFINITIONS, execute_tool
 from app.pipeline.constraint_checker import check_constraints, extract_constraints
-from app.pipeline.input_enricher import InputEnricher, EnrichedInput
-from app.shared.utils import _extract_city, _progress, _build_route_html, AgentSession, extract_mermaid_from_text
+from app.pipeline.input_enricher import InputEnricher
+from app.shared.utils import (
+    AgentSession,
+    _build_route_html,
+    _extract_city,
+    _progress,
+    extract_mermaid_from_text,
+)
 from app.user_profile import UserProfileManager
-from app.core.constraint_model import RouteConstraints
 
 _MAX_TOOL_ITERATIONS = 16
 
@@ -54,17 +60,15 @@ _SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。用工
 """
 
 
-
-
-
-def run_unified_agent(user_input: str, session: AgentSession = None,
-                      user_id: str = "default",
-                      progress_callback=None) -> tuple:
+def run_unified_agent(
+    user_input: str, session: AgentSession = None, user_id: str = "default", progress_callback=None
+) -> tuple:
     """统一 Agent 入口 — 工具调用循环."""
     if session is None:
         session = AgentSession()
 
-    _p = lambda emoji, msg: _progress(emoji, msg, callback=progress_callback)
+    def _p(emoji, msg):
+        return _progress(emoji, msg, callback=progress_callback)
 
     profile_mgr = UserProfileManager(user_id=user_id)
     user_data = profile_mgr.load()
@@ -73,7 +77,7 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
     enriched = InputEnricher.enrich(
         user_input,
         session_city=session.city or session.default_city or "西安",
-        session_keywords=session.keywords if session.keywords != "美食,景点" else ""
+        session_keywords=session.keywords if session.keywords != "美食,景点" else "",
     )
     session._last_enriched = enriched  # stash for _build_messages
 
@@ -86,7 +90,7 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
         top_cats_short.append(tc)
 
     # 构建消息
-    messages = _build_messages(user_input, session, user_data)
+    messages = _build_messages(user_input, session, user_data, profile_mgr)
 
     # Agent 状态（工具之间共享）— 多轮对话时从 session 恢复
     agent_state = {
@@ -107,7 +111,7 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
         session.constraints = RouteConstraints()
 
     # Merge current input
-    round_num = getattr(session, '_round_count', 0) + 1
+    round_num = getattr(session, "_round_count", 0) + 1
     session._round_count = round_num
     session.constraints = session.constraints.merge(user_input, round_num=round_num)
 
@@ -132,17 +136,21 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
     _TIMEOUT = 90  # 秒，超过后强制收束
 
     narration = ""
-    for iteration in range(_MAX_TOOL_ITERATIONS):
+    for _iteration in range(_MAX_TOOL_ITERATIONS):
         elapsed = time.time() - _start_time
 
         # 超时保护：超过 90s 且有簇数据 → 强制 build_route 并结束
         if elapsed > _TIMEOUT and agent_state.get("last_clusters"):
             _p("⏰", f"超时保护({elapsed:.0f}s)，强制收束")
             try:
-                result_json = execute_tool("build_route", {
-                    "cluster_ids": agent_state["last_clusters"][:3],
-                    "num_stops": min(3, len(agent_state["last_clusters"])),
-                }, agent_state)
+                result_json = execute_tool(
+                    "build_route",
+                    {
+                        "cluster_ids": agent_state["last_clusters"][:3],
+                        "num_stops": min(3, len(agent_state["last_clusters"])),
+                    },
+                    agent_state,
+                )
             except Exception:
                 pass
             if agent_state.get("path_result"):
@@ -153,13 +161,15 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
                 # 最后一次尝试：直接用图规划
                 try:
                     from app.pipeline.cluster_tools import tool_build_route
+
                     oc = agent_state.get("origin_coords")
                     dc = agent_state.get("dest_coords")
                     if oc:
                         r = tool_build_route(
                             agent_state["last_clusters"][:3],
                             min(3, len(agent_state["last_clusters"])),
-                            origin_coords=oc, dest_coords=dc,
+                            origin_coords=oc,
+                            dest_coords=dc,
                             dest_name=agent_state.get("dest_name", ""),
                         )
                         if r.get("success") and r.get("stops"):
@@ -175,7 +185,8 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
 
         try:
             response = call_llm_with_tools(
-                messages, top_cats_short,
+                messages,
+                top_cats_short,
                 system=_SYSTEM_PROMPT,
                 max_tokens=3000,
             )
@@ -203,16 +214,22 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
             if _budget_used.get(name, 0) >= _BUDGET.get(name, 1):
                 _p("⏭️", f"跳过 {name}（预算耗尽：{_budget_used[name]}/{_BUDGET[name]}）")
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": tool_id,
-                     "content": '{"skipped":true,"reason":"该工具调用次数已达上限，请使用已有数据继续"}'
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_id,
+                                "content": '{"skipped":true,"reason":"该工具调用次数已达上限，请使用已有数据继续"}',
+                            }
+                        ],
                     }
-                ]})
+                )
                 continue
 
             _budget_used[name] = _budget_used.get(name, 0) + 1
-            _p("🔧", f"调用工具：{name}({_brief_input(name, inp)}) "
-                      f"[{_budget_used[name]}/{_BUDGET.get(name, '∞')}]")
+            _p("🔧", f"调用工具：{name}({_brief_input(name, inp)}) [{_budget_used[name]}/{_BUDGET.get(name, '∞')}]")
 
             result_json = execute_tool(name, inp, agent_state)
 
@@ -226,17 +243,21 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
                     pass
 
             messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": tool_id, "content": result_json}
-            ]})
+            messages.append(
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": result_json}]}
+            )
     else:
         _p("⚠️", f"工具调用超过 {_MAX_TOOL_ITERATIONS} 轮，强制终止")
         # 尝试用缓存的簇构建
         if not narration and agent_state.get("last_clusters") and not agent_state.get("path_result"):
-            result_json = execute_tool("build_route", {
-                "cluster_ids": agent_state["last_clusters"][:3],
-                "num_stops": min(3, len(agent_state["last_clusters"])),
-            }, agent_state)
+            result_json = execute_tool(
+                "build_route",
+                {
+                    "cluster_ids": agent_state["last_clusters"][:3],
+                    "num_stops": min(3, len(agent_state["last_clusters"])),
+                },
+                agent_state,
+            )
         if not narration:
             narration = "抱歉，路线规划超时了。请尝试简化需求（如指定更明确的地点或偏好）。"
 
@@ -275,32 +296,34 @@ def run_unified_agent(user_input: str, session: AgentSession = None,
     return narration, session
 
 
-def _build_messages(user_input: str, session: AgentSession, user_data: dict) -> list:
+def _build_messages(user_input: str, session: AgentSession, user_data: dict, profile_mgr=None) -> list:
     """构建初始消息列表."""
     messages = []
 
     # 注入多轮上下文
     if session.last_user_input:
-        ctx = _build_context(session, user_data)
+        ctx = _build_context(session, user_data, profile_mgr)
         constraint_block = ""
         if session.constraints and not session.constraints.is_empty():
             constraint_block = session.constraints.to_prompt_block()
-        
+
         conflicts = session.constraints.get_conflicts(user_input) if session.constraints else []
         conflict_note = ""
         if conflicts:
             conflict_note = "⚠️ 约束冲突：" + "; ".join(conflicts) + " → 以本轮输入为准。\n\n"
-        
+
         # 注入预处理结果（城市/偏好/排除）
-        enriched = getattr(session, '_last_enriched', None)
+        enriched = getattr(session, "_last_enriched", None)
         enriched_prefix = enriched.enriched_text + "\n\n" if enriched else ""
-        
-        messages.append({
-            "role": "user",
-            "content": f"{enriched_prefix}{constraint_block}\n{conflict_note}## 路线参考\n{ctx}\n\n## 用户输入\n{user_input}\n\n请根据新输入重新规划。冲突以新输入为准。",
-        })
+
+        messages.append(
+            {
+                "role": "user",
+                "content": f"{enriched_prefix}{constraint_block}\n{conflict_note}## 路线参考\n{ctx}\n\n## 用户输入\n{user_input}\n\n请根据新输入重新规划。冲突以新输入为准。",
+            }
+        )
     else:
-        enriched = getattr(session, '_last_enriched', None)
+        enriched = getattr(session, "_last_enriched", None)
         if enriched:
             messages.append({"role": "user", "content": f"{enriched.enriched_text}\n\n用户输入：{user_input}"})
         else:
@@ -309,22 +332,26 @@ def _build_messages(user_input: str, session: AgentSession, user_data: dict) -> 
     return messages
 
 
-def _build_context(session: AgentSession, user_data: dict) -> str:
+def _build_context(session: AgentSession, user_data: dict, profile_mgr=None) -> str:
     """从 session 构建上下文摘要."""
     parts = [f"城市：{session.city}"]
     if session.start_name:
         parts.append(f"上次起点：{session.start_name}")
     if session.origin_coords:
-        parts.append(f"起点坐标已缓存：({session.origin_coords[0]:.4f}, {session.origin_coords[1]:.4f})，如地点未变可跳过 geocode")
+        parts.append(
+            f"起点坐标已缓存：({session.origin_coords[0]:.4f}, {session.origin_coords[1]:.4f})，如地点未变可跳过 geocode"
+        )
     if session.dest_name:
         parts.append(f"上次终点：{session.dest_name}")
     if session.dest_coords:
-        parts.append(f"终点坐标已缓存：({session.dest_coords[0]:.4f}, {session.dest_coords[1]:.4f})，如地点未变可跳过 geocode")
+        parts.append(
+            f"终点坐标已缓存：({session.dest_coords[0]:.4f}, {session.dest_coords[1]:.4f})，如地点未变可跳过 geocode"
+        )
     if session.stop_names:
         parts.append(f"上次途经：{' → '.join(session.stop_names)}")
     if session.keywords:
         parts.append(f"上次偏好：{session.keywords}")
-    if getattr(session, 'budget', None):
+    if getattr(session, "budget", None):
         parts.append(f"上次预算：{session.budget}")
     if session.num_stops:
         parts.append(f"上次站数：{session.num_stops}")
@@ -352,7 +379,7 @@ def _build_context(session: AgentSession, user_data: dict) -> str:
     if session.constraints and not session.constraints.is_empty():
         c = session.constraints
         if c.budget:
-            labels = {"low":"低(<40元)", "medium":"中(30-100元)", "high":"高(>80元)"}
+            labels = {"low": "低(<40元)", "medium": "中(30-100元)", "high": "高(>80元)"}
             parts.append(f"约束-预算：{labels.get(c.budget, c.budget)}")
         if c.dietary:
             parts.append(f"约束-饮食：{', '.join(c.dietary)}")
@@ -375,9 +402,9 @@ def _brief_input(tool_name: str, inp: dict) -> str:
     return ""
 
 
-
-def _finalize_session(session: AgentSession, agent_state: dict,
-                      user_input: str, narration: str, violations: list = None):
+def _finalize_session(
+    session: AgentSession, agent_state: dict, user_input: str, narration: str, violations: list = None
+):
     """将 agent_state 中的信息同步回 AgentSession."""
     session.last_user_input = user_input
     if violations:
@@ -392,23 +419,33 @@ def _finalize_session(session: AgentSession, agent_state: dict,
 
     # 用户明确提到的地名是否出现在路线中（优先用 constraints.must_include）
     must_places = []
-    if hasattr(session, 'constraints') and session.constraints:
+    if hasattr(session, "constraints") and session.constraints:
         must_places = list(session.constraints.must_include)
     if not must_places:
         dest_name = agent_state.get("dest_name", "")
         if dest_name and len(dest_name) > 2:
             # 过滤掉纯城市名（西安/北京等）免得误报
-            _CITY_NAMES = {"西安","北京","上海","成都","杭州","深圳","广州","南京","武汉","重庆","天津","长沙"}
+            _CITY_NAMES = {
+                "西安",
+                "北京",
+                "上海",
+                "成都",
+                "杭州",
+                "深圳",
+                "广州",
+                "南京",
+                "武汉",
+                "重庆",
+                "天津",
+                "长沙",
+            }
             if dest_name.rstrip("市") not in _CITY_NAMES:
                 must_places = [dest_name]
-    
+
     if must_places and stop_names:
         for mp in must_places:
-            mp_keywords = [mp, mp.replace("街", ""), mp.replace("路", ""), mp.replace("·","")]
-            found = any(
-                any(dk in s or s in dk for dk in mp_keywords)
-                for s in stop_names
-            )
+            mp_keywords = [mp, mp.replace("街", ""), mp.replace("路", ""), mp.replace("·", "")]
+            found = any(any(dk in s or s in dk for dk in mp_keywords) for s in stop_names)
             if not found and len(mp) > 2:
                 _progress("⚠️", f"用户提到的'{mp}'未出现在路线stops中")
 
@@ -426,7 +463,7 @@ def _finalize_session(session: AgentSession, agent_state: dict,
         session.dest_name = agent_state["dest_name"]
 
     # 提取城市（优先 agent_state，其次 user_input）
-    city = agent_state.get("city") or _extract_city(user_input, getattr(session, 'default_city', ''))
+    city = agent_state.get("city") or _extract_city(user_input, getattr(session, "default_city", ""))
     if city:
         session.city = city
 
@@ -457,25 +494,29 @@ def _finalize_session(session: AgentSession, agent_state: dict,
         segments = []
         for i, s in enumerate(stops):
             prev_name = stops[i - 1]["name"] if i > 0 else (session.start_name or "起点")
-            segments.append({
-                "from": prev_name,
-                "to": s["name"],
-                "transport": s.get("transport_from_prev", "步行"),
-                "distance": s.get("distance_m", 0),
-                "duration": s.get("duration_min", 0) * 60,
-            })
+            segments.append(
+                {
+                    "from": prev_name,
+                    "to": s["name"],
+                    "transport": s.get("transport_from_prev", "步行"),
+                    "distance": s.get("distance_m", 0),
+                    "duration": s.get("duration_min", 0) * 60,
+                }
+            )
 
         # 添加终点段（如果 dest_name 存在且不等于最后一站）
         dest_name = agent_state.get("dest_name") or ""
         last_name = stops[-1]["name"] if stops else ""
         if dest_name and dest_name != last_name:
-            segments.append({
-                "from": last_name,
-                "to": dest_name,
-                "transport": "步行",
-                "distance": 500,
-                "duration": 600,
-            })
+            segments.append(
+                {
+                    "from": last_name,
+                    "to": dest_name,
+                    "transport": "步行",
+                    "distance": 500,
+                    "duration": 600,
+                }
+            )
 
         total_dur = sum(s["duration"] for s in segments)
         total_dist = sum(s["distance"] for s in segments)
@@ -518,11 +559,9 @@ def _finalize_session(session: AgentSession, agent_state: dict,
             session.constraints.preferred_categories = ac.preferred_categories
 
 
-def _write_output_files(session: AgentSession, narration: str,
-                        mermaid: str, user_input: str):
+def _write_output_files(session: AgentSession, narration: str, mermaid: str, user_input: str):
     """生成 Mermaid 和 HTML 输出文件（与现有流程兼容）."""
     from pathlib import Path
-    from app.shared.utils import _build_route_html
 
     output_dir = Path(__file__).parent.parent.parent / "data" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)

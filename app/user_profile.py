@@ -93,7 +93,6 @@
 """
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -161,7 +160,7 @@ class UserProfileManager:
             self._write(data)
             return data
         try:
-            with open(self.file_path, "r", encoding="utf-8") as f:
+            with open(self.file_path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             data = _default_profile()
@@ -262,17 +261,18 @@ class UserProfileManager:
 
     # ── 画像学习 ──────────────────────────────────────
 
-    def update_from_route(self, stops: list, keywords: list = None,
-                           budget: str = None, city: str = None):
+    def update_from_route(self, stops: list, keywords: list = None, budget: str = None, city: str = None):
         """从用户完成的路线中学习偏好."""
         data = self.load()
-        profile = data.setdefault("profile", {})
+        _profile = data.setdefault("profile", {})
         learned = data.setdefault("learned", {})
 
         # 品类偏好（累积计数）
         cats = learned.setdefault("preferred_cats", {})
         for s in stops:
-            cat = (s.get("category") or "").split(";")[-1] if ";" in (s.get("category") or "") else s.get("category", "")
+            cat = (
+                (s.get("category") or "").split(";")[-1] if ";" in (s.get("category") or "") else s.get("category", "")
+            )
             if cat:
                 cats[cat] = cats.get(cat, 0) + 1
 
@@ -328,6 +328,7 @@ class UserProfileManager:
         budgets = learned.get("budget_history", [])
         if budgets:
             from collections import Counter
+
             bc = Counter(budgets)
             top_budget = bc.most_common(1)[0][0]
             budget_label = {"low": "低", "medium": "中", "high": "高"}.get(top_budget, top_budget)

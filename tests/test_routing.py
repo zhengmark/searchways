@@ -1,7 +1,9 @@
 """
 测试高德步行路径规划 API
 """
+
 import sys
+
 sys.path.insert(0, ".")
 
 from app.algorithms.routing import walk_distance

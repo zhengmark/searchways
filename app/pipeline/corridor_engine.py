@@ -5,9 +5,10 @@
 """
 
 import math as _math
-from db.connection import get_conn
+
 from app.algorithms.geo import haversine, project_ratio
 from app.pipeline.reason_engine import generate_poi_reasons
+from db.connection import get_conn
 
 # 公里 → 度换算
 _LAT_PER_KM = 1.0 / 111.32
@@ -22,12 +23,14 @@ def _row_to_dict(row) -> dict:
     return dict(row)
 
 
-def build_corridor(origin_coords: tuple[float, float],
-                   dest_coords: tuple[float, float] | None,
-                   cluster_ids: list[int],
-                   keywords: list[str] = None,
-                   budget: str = None,
-                   corridor_width_km: float = 5.0) -> dict:
+def build_corridor(
+    origin_coords: tuple[float, float],
+    dest_coords: tuple[float, float] | None,
+    cluster_ids: list[int],
+    keywords: list[str] = None,
+    budget: str = None,
+    corridor_width_km: float = 5.0,
+) -> dict:
     """构建走廊数据：加载 POI + 计算元数据 + 生成推荐理由.
 
     Returns:
@@ -47,26 +50,33 @@ def build_corridor(origin_coords: tuple[float, float],
             placeholders = ",".join("?" * len(db_ids))
 
             # 簇元数据（中心坐标）
-            meta_rows = conn.execute(f"""
+            meta_rows = conn.execute(
+                f"""
                 SELECT cluster_id, center_lat, center_lng, size
                 FROM cluster_meta
                 WHERE cluster_id IN ({placeholders})
-            """, db_ids).fetchall()
+            """,
+                db_ids,
+            ).fetchall()
             for r in meta_rows:
                 cluster_centers_map[r["cluster_id"]] = {
-                    "lat": r["center_lat"], "lng": r["center_lng"],
+                    "lat": r["center_lat"],
+                    "lng": r["center_lng"],
                     "size": r["size"],
                 }
 
             # POI 全量加载
-            poi_rows = conn.execute(f"""
+            poi_rows = conn.execute(
+                f"""
                 SELECT id, name, lat, lng, category, subcategory,
                        rating, price_per_person, address, cluster_id, district
                 FROM pois
                 WHERE cluster_id IN ({placeholders})
                   AND lat IS NOT NULL
                 ORDER BY rating DESC NULLS LAST
-            """, db_ids).fetchall()
+            """,
+                db_ids,
+            ).fetchall()
 
         pois = [_row_to_dict(r) for r in poi_rows]
 
@@ -81,10 +91,8 @@ def build_corridor(origin_coords: tuple[float, float],
 
     for p in pois:
         if dest:
-            p["projection_ratio"] = round(
-                project_ratio(p["lat"], p["lng"], origin, dest), 3)
-            p["perpendicular_km"] = round(
-                _perpendicular_distance(p["lat"], p["lng"], origin, dest), 2)
+            p["projection_ratio"] = round(project_ratio(p["lat"], p["lng"], origin, dest), 3)
+            p["perpendicular_km"] = round(_perpendicular_distance(p["lat"], p["lng"], origin, dest), 2)
         else:
             # 无终点：仅算距起点距离用来模拟投影
             d = haversine(origin_coords[0], origin_coords[1], p["lat"], p["lng"])
@@ -92,8 +100,7 @@ def build_corridor(origin_coords: tuple[float, float],
             p["perpendicular_km"] = 0.0
 
         # 生成推荐理由
-        p["recommendation_reasons"] = generate_poi_reasons(
-            p, keywords or [], budget, origin_coords)
+        p["recommendation_reasons"] = generate_poi_reasons(p, keywords or [], budget, origin_coords)
 
         # 分配唯一 ID
         p["poi_id"] = f"{p.get('cluster_id', 0)}_{p.get('id', 0)}"
@@ -103,23 +110,21 @@ def build_corridor(origin_coords: tuple[float, float],
     for cid in db_ids:
         meta = cluster_centers_map.get(cid)
         if meta:
-            cluster_markers.append({
-                "cluster_id": cid,
-                "lat": meta["lat"],
-                "lng": meta["lng"],
-                "name": _cluster_label(cid, pois),
-                "poi_count": meta.get("size", 0),
-            })
+            cluster_markers.append(
+                {
+                    "cluster_id": cid,
+                    "lat": meta["lat"],
+                    "lng": meta["lng"],
+                    "name": _cluster_label(cid, pois),
+                    "poi_count": meta.get("size", 0),
+                }
+            )
 
     # ── 计算走廊形状 ──
     # 收集所有簇中心
-    centers = [
-        (m["lat"], m["lng"])
-        for m in cluster_markers
-    ]
+    centers = [(m["lat"], m["lng"]) for m in cluster_markers]
     if dest_coords:
-        corridor_shape = compute_corridor_shape(
-            centers, origin_coords, dest_coords, padding_km=corridor_width_km / 2)
+        corridor_shape = compute_corridor_shape(centers, origin_coords, dest_coords, padding_km=corridor_width_km / 2)
     else:
         # 无终点时：以起点为中心生成圆形包络（半径取簇中心最大距离 + padding）
         max_dist = 3.0  # 默认 3km
@@ -133,10 +138,12 @@ def build_corridor(origin_coords: tuple[float, float],
         corridor_shape = []
         for i in range(steps + 1):
             angle = 2 * _math.pi * i / steps
-            corridor_shape.append([
-                o_lat + radius_deg * _math.sin(angle),
-                o_lng + radius_deg * _math.cos(angle) / _math.cos(_math.radians(o_lat)),
-            ])
+            corridor_shape.append(
+                [
+                    o_lat + radius_deg * _math.sin(angle),
+                    o_lng + radius_deg * _math.cos(angle) / _math.cos(_math.radians(o_lat)),
+                ]
+            )
 
     return {
         "corridor_pois": _build_corridor_poi_dicts(pois),
@@ -149,21 +156,23 @@ def _build_corridor_poi_dicts(pois: list) -> list[dict]:
     """转换为前端友好的 POI 字典列表."""
     result = []
     for p in pois:
-        result.append({
-            "id": p.get("poi_id", ""),
-            "name": p.get("name", ""),
-            "lat": p.get("lat"),
-            "lng": p.get("lng"),
-            "category": p.get("category", ""),
-            "rating": p.get("rating"),
-            "price_per_person": p.get("price_per_person"),
-            "address": p.get("address", ""),
-            "cluster_id": p.get("cluster_id", 0),
-            "projection_ratio": p.get("projection_ratio", 0),
-            "perpendicular_km": p.get("perpendicular_km", 0),
-            "recommendation_reasons": p.get("recommendation_reasons", {}),
-            "selected": False,
-        })
+        result.append(
+            {
+                "id": p.get("poi_id", ""),
+                "name": p.get("name", ""),
+                "lat": p.get("lat"),
+                "lng": p.get("lng"),
+                "category": p.get("category", ""),
+                "rating": p.get("rating"),
+                "price_per_person": p.get("price_per_person"),
+                "address": p.get("address", ""),
+                "cluster_id": p.get("cluster_id", 0),
+                "projection_ratio": p.get("projection_ratio", 0),
+                "perpendicular_km": p.get("perpendicular_km", 0),
+                "recommendation_reasons": p.get("recommendation_reasons", {}),
+                "selected": False,
+            }
+        )
     return result
 
 
@@ -200,8 +209,7 @@ def _cluster_label(cluster_id: int, pois: list) -> str:
     return top_cat or f"区域{cluster_id}"
 
 
-def _perpendicular_distance(lat: float, lng: float,
-                            origin: dict, dest: dict) -> float:
+def _perpendicular_distance(lat: float, lng: float, origin: dict, dest: dict) -> float:
     """计算点到 OD 线段的垂直距离（km）."""
     # 投影后的点
     t = project_ratio(lat, lng, origin, dest)
@@ -210,10 +218,12 @@ def _perpendicular_distance(lat: float, lng: float,
     return haversine(lat, lng, proj_lat, proj_lng) / 1000.0
 
 
-def compute_corridor_shape(cluster_centers: list[tuple[float, float]],
-                           origin: tuple[float, float],
-                           dest: tuple[float, float] | None,
-                           padding_km: float = 2.5) -> list[list[float]]:
+def compute_corridor_shape(
+    cluster_centers: list[tuple[float, float]],
+    origin: tuple[float, float],
+    dest: tuple[float, float] | None,
+    padding_km: float = 2.5,
+) -> list[list[float]]:
     """计算走廊包络多边形（GeoJSON 格式）.
 
     围绕起终点连线构建缓冲矩形，宽度取簇中心最大偏离距离 + padding.
@@ -232,7 +242,7 @@ def compute_corridor_shape(cluster_centers: list[tuple[float, float]],
     dlat_km = dlat * 111.32
     dng_per_km = 1.0 / _lng_per_km(mid_lat) if abs(_math.cos(_math.radians(mid_lat))) > 0.01 else 111.32
     dlng_km = dlng / dng_per_km
-    length_km = _math.sqrt(dlat_km ** 2 + dlng_km ** 2)
+    length_km = _math.sqrt(dlat_km**2 + dlng_km**2)
     if length_km < 0.001:
         return []
 

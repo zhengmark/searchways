@@ -1,5 +1,5 @@
 """地理聚类 — 简化版 DBSCAN，按经纬度将 POI 聚为"热区"."""
-import math
+
 from app.algorithms.geo import haversine
 
 
@@ -21,7 +21,8 @@ def geo_cluster(pois: list, eps_meters: float = 500, min_samples: int = 3) -> li
     # 邻域查找
     def _neighbors(i):
         return [
-            j for j in range(n)
+            j
+            for j in range(n)
             if j != i and haversine(pois[i]["lat"], pois[i]["lng"], pois[j]["lat"], pois[j]["lng"]) <= eps_meters
         ]
 

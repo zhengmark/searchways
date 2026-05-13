@@ -1,4 +1,5 @@
 """共享工具函数 —— 城市提取、进度打印、Mermaid/HTML 渲染."""
+
 import json
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _STATIC_DIR = _PROJECT_ROOT / "web" / "static" / "assets" / "leaflet"
 _STATIC = {}
 
+
 def _static(name):
     if name not in _STATIC:
         p = _STATIC_DIR / name
@@ -22,6 +24,7 @@ def _static(name):
 
 
 # ── AgentSession ─────────────────────────────────────
+
 
 class AgentSession:
     def __init__(self):
@@ -48,15 +51,15 @@ class AgentSession:
         self.last_clusters_hint = []
 
         # ── Phase 2-4: 交互式编辑字段 ──
-        self.corridor_pois: list = []         # 走廊内所有候选 POI
-        self.corridor_clusters: list = []     # 簇中心坐标（画椭圆用）
-        self.corridor_shape: list = []        # 类椭圆包络多边形 [[lat,lng],...]
-        self.selected_poi_ids: list = []      # 用户确认选中的 POI ID
-        self.removed_poi_ids: list = []       # 用户主动移除的 POI ID
-        self.route_confirmed: bool = False    # 是否已点"确认路线"
-        self.graph_data: dict | None = None   # 序列化图（避免重复 ~80 次 API 调用）
+        self.corridor_pois: list = []  # 走廊内所有候选 POI
+        self.corridor_clusters: list = []  # 簇中心坐标（画椭圆用）
+        self.corridor_shape: list = []  # 类椭圆包络多边形 [[lat,lng],...]
+        self.selected_poi_ids: list = []  # 用户确认选中的 POI ID
+        self.removed_poi_ids: list = []  # 用户主动移除的 POI ID
+        self.route_confirmed: bool = False  # 是否已点"确认路线"
+        self.graph_data: dict | None = None  # 序列化图（避免重复 ~80 次 API 调用）
         self.recommendation_reasons: dict = {}  # {poi_id: {structured, user_need}}
-        self.transit_preferences: dict = {}   # {mode, avoid_transfers, ...}
+        self.transit_preferences: dict = {}  # {mode, avoid_transfers, ...}
 
     def to_dict(self) -> dict:
         """JSON 序列化."""
@@ -69,17 +72,18 @@ class AgentSession:
                 d[k] = list(v)
             elif isinstance(v, set):
                 d[k] = list(v)
-            elif hasattr(v, 'to_dict'):
+            elif hasattr(v, "to_dict"):
                 d[k] = v.to_dict()
-            elif hasattr(v, '__dataclass_fields__'):
+            elif hasattr(v, "__dataclass_fields__"):
                 # Convert dataclass to dict (e.g. EnrichedInput)
                 from dataclasses import asdict
+
                 d[k] = asdict(v)
             else:
                 d[k] = v
         # Serialize constraints if present
-        if self.constraints is not None and hasattr(self.constraints, 'to_dict'):
-            d['constraints'] = self.constraints.to_dict()
+        if self.constraints is not None and hasattr(self.constraints, "to_dict"):
+            d["constraints"] = self.constraints.to_dict()
         return d
 
     @classmethod
@@ -96,12 +100,13 @@ class AgentSession:
             if hasattr(s, k):
                 setattr(s, k, v)
         # Deserialize constraints
-        if 'constraints' in d and d['constraints'] and RouteConstraints is not None:
-            s.constraints = RouteConstraints.from_dict(d['constraints'])
+        if "constraints" in d and d["constraints"] and RouteConstraints is not None:
+            s.constraints = RouteConstraints.from_dict(d["constraints"])
         return s
 
 
 # ── 进度打印 ──────────────────────────────────────────
+
 
 def _progress(emoji: str, msg: str, callback=None):
     if callback:
@@ -113,37 +118,323 @@ def _progress(emoji: str, msg: str, callback=None):
 # ── 城市提取 ──────────────────────────────────────────
 
 _ALL_CITIES = [
-    "北京", "上海", "天津", "重庆",
-    "石家庄", "唐山", "秦皇岛", "邯郸", "保定", "张家口", "承德", "沧州", "廊坊", "衡水", "太原", "大同",
-    "阳泉", "长治", "晋城", "朔州", "忻州", "吕梁", "晋中", "临汾", "运城", "呼和浩特", "包头", "乌海",
-    "赤峰", "通辽", "鄂尔多斯", "呼伦贝尔", "巴彦淖尔", "乌兰察布",
-    "沈阳", "大连", "鞍山", "抚顺", "本溪", "丹东", "锦州", "营口", "阜新", "辽阳", "盘锦", "铁岭",
-    "朝阳", "葫芦岛", "长春", "吉林", "四平", "辽源", "通化", "白山", "松原", "白城", "延边", "哈尔滨",
-    "齐齐哈尔", "鸡西", "鹤岗", "双鸭山", "大庆", "伊春", "佳木斯", "七台河", "牡丹江", "黑河", "绥化",
-    "南京", "无锡", "徐州", "常州", "苏州", "南通", "连云港", "淮安", "盐城", "扬州", "镇江", "泰州",
-    "宿迁", "杭州", "宁波", "温州", "嘉兴", "湖州", "绍兴", "金华", "衢州", "舟山", "台州", "丽水",
-    "合肥", "芜湖", "蚌埠", "淮南", "马鞍山", "淮北", "铜陵", "安庆", "黄山", "滁州", "阜阳", "宿州",
-    "六安", "亳州", "池州", "宣城", "福州", "厦门", "莆田", "三明", "泉州", "漳州", "南平", "龙岩",
-    "宁德", "南昌", "景德镇", "萍乡", "九江", "新余", "鹰潭", "赣州", "吉安", "宜春", "抚州", "上饶",
-    "济南", "青岛", "淄博", "枣庄", "东营", "烟台", "潍坊", "济宁", "泰安", "威海", "日照", "临沂",
-    "德州", "聊城", "滨州", "菏泽",
-    "郑州", "开封", "洛阳", "平顶山", "安阳", "鹤壁", "新乡", "焦作", "濮阳", "许昌", "漯河", "三门峡",
-    "南阳", "商丘", "信阳", "周口", "驻马店", "武汉", "黄石", "十堰", "宜昌", "襄阳", "鄂州", "荆门",
-    "孝感", "荆州", "黄冈", "咸宁", "随州", "长沙", "株洲", "湘潭", "衡阳", "邵阳", "岳阳", "常德",
-    "张家界", "益阳", "郴州", "永州", "怀化", "娄底",
-    "广州", "深圳", "珠海", "汕头", "佛山", "韶关", "湛江", "肇庆", "江门", "茂名", "惠州", "梅州",
-    "汕尾", "河源", "阳江", "清远", "东莞", "中山", "潮州", "揭阳", "云浮", "南宁", "柳州", "桂林",
-    "梧州", "北海", "防城港", "钦州", "贵港", "玉林", "百色", "贺州", "河池", "来宾", "崇左", "海口",
-    "三亚", "三沙",
-    "成都", "自贡", "攀枝花", "泸州", "德阳", "绵阳", "广元", "遂宁", "内江", "乐山", "南充", "眉山",
-    "宜宾", "广安", "达州", "雅安", "巴中", "资阳", "贵阳", "六盘水", "遵义", "安顺", "毕节", "铜仁",
-    "昆明", "曲靖", "玉溪", "保山", "昭通", "丽江", "普洱", "临沧", "拉萨", "日喀则",
-    "西安", "铜川", "宝鸡", "咸阳", "渭南", "延安", "汉中", "榆林", "安康", "商洛", "兰州", "嘉峪关",
-    "金昌", "白银", "天水", "武威", "张掖", "平凉", "酒泉", "庆阳", "定西", "陇南", "西宁", "银川",
-    "乌鲁木齐", "克拉玛依", "吐鲁番", "哈密",
-    "香港", "澳门", "台北", "新北", "桃园", "台中", "台南", "高雄",
-    "大理", "丽江", "香格里拉", "腾冲", "瑞丽", "景洪", "凯里", "都江堰", "峨眉山", "武夷山", "黄山",
-    "庐山", "张家界", "凤凰", "婺源", "平遥", "敦煌", "哈密", "喀什", "伊宁", "满洲里", "延吉",
+    "北京",
+    "上海",
+    "天津",
+    "重庆",
+    "石家庄",
+    "唐山",
+    "秦皇岛",
+    "邯郸",
+    "保定",
+    "张家口",
+    "承德",
+    "沧州",
+    "廊坊",
+    "衡水",
+    "太原",
+    "大同",
+    "阳泉",
+    "长治",
+    "晋城",
+    "朔州",
+    "忻州",
+    "吕梁",
+    "晋中",
+    "临汾",
+    "运城",
+    "呼和浩特",
+    "包头",
+    "乌海",
+    "赤峰",
+    "通辽",
+    "鄂尔多斯",
+    "呼伦贝尔",
+    "巴彦淖尔",
+    "乌兰察布",
+    "沈阳",
+    "大连",
+    "鞍山",
+    "抚顺",
+    "本溪",
+    "丹东",
+    "锦州",
+    "营口",
+    "阜新",
+    "辽阳",
+    "盘锦",
+    "铁岭",
+    "朝阳",
+    "葫芦岛",
+    "长春",
+    "吉林",
+    "四平",
+    "辽源",
+    "通化",
+    "白山",
+    "松原",
+    "白城",
+    "延边",
+    "哈尔滨",
+    "齐齐哈尔",
+    "鸡西",
+    "鹤岗",
+    "双鸭山",
+    "大庆",
+    "伊春",
+    "佳木斯",
+    "七台河",
+    "牡丹江",
+    "黑河",
+    "绥化",
+    "南京",
+    "无锡",
+    "徐州",
+    "常州",
+    "苏州",
+    "南通",
+    "连云港",
+    "淮安",
+    "盐城",
+    "扬州",
+    "镇江",
+    "泰州",
+    "宿迁",
+    "杭州",
+    "宁波",
+    "温州",
+    "嘉兴",
+    "湖州",
+    "绍兴",
+    "金华",
+    "衢州",
+    "舟山",
+    "台州",
+    "丽水",
+    "合肥",
+    "芜湖",
+    "蚌埠",
+    "淮南",
+    "马鞍山",
+    "淮北",
+    "铜陵",
+    "安庆",
+    "黄山",
+    "滁州",
+    "阜阳",
+    "宿州",
+    "六安",
+    "亳州",
+    "池州",
+    "宣城",
+    "福州",
+    "厦门",
+    "莆田",
+    "三明",
+    "泉州",
+    "漳州",
+    "南平",
+    "龙岩",
+    "宁德",
+    "南昌",
+    "景德镇",
+    "萍乡",
+    "九江",
+    "新余",
+    "鹰潭",
+    "赣州",
+    "吉安",
+    "宜春",
+    "抚州",
+    "上饶",
+    "济南",
+    "青岛",
+    "淄博",
+    "枣庄",
+    "东营",
+    "烟台",
+    "潍坊",
+    "济宁",
+    "泰安",
+    "威海",
+    "日照",
+    "临沂",
+    "德州",
+    "聊城",
+    "滨州",
+    "菏泽",
+    "郑州",
+    "开封",
+    "洛阳",
+    "平顶山",
+    "安阳",
+    "鹤壁",
+    "新乡",
+    "焦作",
+    "濮阳",
+    "许昌",
+    "漯河",
+    "三门峡",
+    "南阳",
+    "商丘",
+    "信阳",
+    "周口",
+    "驻马店",
+    "武汉",
+    "黄石",
+    "十堰",
+    "宜昌",
+    "襄阳",
+    "鄂州",
+    "荆门",
+    "孝感",
+    "荆州",
+    "黄冈",
+    "咸宁",
+    "随州",
+    "长沙",
+    "株洲",
+    "湘潭",
+    "衡阳",
+    "邵阳",
+    "岳阳",
+    "常德",
+    "张家界",
+    "益阳",
+    "郴州",
+    "永州",
+    "怀化",
+    "娄底",
+    "广州",
+    "深圳",
+    "珠海",
+    "汕头",
+    "佛山",
+    "韶关",
+    "湛江",
+    "肇庆",
+    "江门",
+    "茂名",
+    "惠州",
+    "梅州",
+    "汕尾",
+    "河源",
+    "阳江",
+    "清远",
+    "东莞",
+    "中山",
+    "潮州",
+    "揭阳",
+    "云浮",
+    "南宁",
+    "柳州",
+    "桂林",
+    "梧州",
+    "北海",
+    "防城港",
+    "钦州",
+    "贵港",
+    "玉林",
+    "百色",
+    "贺州",
+    "河池",
+    "来宾",
+    "崇左",
+    "海口",
+    "三亚",
+    "三沙",
+    "成都",
+    "自贡",
+    "攀枝花",
+    "泸州",
+    "德阳",
+    "绵阳",
+    "广元",
+    "遂宁",
+    "内江",
+    "乐山",
+    "南充",
+    "眉山",
+    "宜宾",
+    "广安",
+    "达州",
+    "雅安",
+    "巴中",
+    "资阳",
+    "贵阳",
+    "六盘水",
+    "遵义",
+    "安顺",
+    "毕节",
+    "铜仁",
+    "昆明",
+    "曲靖",
+    "玉溪",
+    "保山",
+    "昭通",
+    "丽江",
+    "普洱",
+    "临沧",
+    "拉萨",
+    "日喀则",
+    "西安",
+    "铜川",
+    "宝鸡",
+    "咸阳",
+    "渭南",
+    "延安",
+    "汉中",
+    "榆林",
+    "安康",
+    "商洛",
+    "兰州",
+    "嘉峪关",
+    "金昌",
+    "白银",
+    "天水",
+    "武威",
+    "张掖",
+    "平凉",
+    "酒泉",
+    "庆阳",
+    "定西",
+    "陇南",
+    "西宁",
+    "银川",
+    "乌鲁木齐",
+    "克拉玛依",
+    "吐鲁番",
+    "哈密",
+    "香港",
+    "澳门",
+    "台北",
+    "新北",
+    "桃园",
+    "台中",
+    "台南",
+    "高雄",
+    "大理",
+    "丽江",
+    "香格里拉",
+    "腾冲",
+    "瑞丽",
+    "景洪",
+    "凯里",
+    "都江堰",
+    "峨眉山",
+    "武夷山",
+    "黄山",
+    "庐山",
+    "张家界",
+    "凤凰",
+    "婺源",
+    "平遥",
+    "敦煌",
+    "哈密",
+    "喀什",
+    "伊宁",
+    "满洲里",
+    "延吉",
 ]
 _CITY_PATTERN = re.compile("|".join(re.escape(c) for c in _ALL_CITIES))
 
@@ -161,7 +452,8 @@ def _extract_city(user_input: str, default_city: str = "") -> str:
 
 
 def _infer_city_from_geocode(place_name: str) -> str:
-    from app.providers.amap_provider import geocode, AmapAPIError
+    from app.providers.amap_provider import AmapAPIError, geocode
+
     if not place_name:
         return ""
     try:
@@ -182,6 +474,7 @@ _PLACE_RE = re.compile(
 
 # ── Mermaid 提取 ──────────────────────────────────────
 
+
 def extract_mermaid_from_text(text: str) -> tuple[str, str]:
     """从文本中提取 ```mermaid 代码块，返回 (清理后文本, mermaid代码).
     如果无 mermaid 块，返回 (原文, "").
@@ -190,14 +483,15 @@ def extract_mermaid_from_text(text: str) -> tuple[str, str]:
     if not m:
         return text, ""
     mermaid = m.group(1).strip()
-    narration = text[:m.start()].strip()
-    trailer = text[m.end():].strip()
+    narration = text[: m.start()].strip()
+    trailer = text[m.end() :].strip()
     if trailer:
         narration += "\n\n" + trailer
     return narration, mermaid
 
 
 # ── Mermaid / HTML 渲染 ───────────────────────────────
+
 
 def _shorten_name(name: str) -> str:
     for sep in ["(", "（", "·", "—", "-"]:
@@ -276,32 +570,42 @@ def _build_mermaid_from_path(start_name: str, path_result: dict, stop_names: lis
         else:
             style, emoji = cls, _emoji_for_poi(to_name)
 
-        lines.append(f'    N{i+1}["{emoji} {short}"]:::{style}')
+        lines.append(f'    N{i + 1}["{emoji} {short}"]:::{style}')
 
         if transport == "步行":
-            lines.append(f'    N{i} -->|"{label}"| N{i+1}')
+            lines.append(f'    N{i} -->|"{label}"| N{i + 1}')
         elif transport == "骑行":
-            lines.append(f'    N{i} ==|"{label}"|==> N{i+1}')
+            lines.append(f'    N{i} ==|"{label}"|==> N{i + 1}')
         elif transport == "公交/地铁":
-            lines.append(f'    N{i} -.->|"{label}"| N{i+1}')
+            lines.append(f'    N{i} -.->|"{label}"| N{i + 1}')
         else:
-            lines.append(f'    N{i} ==|"{label}"|==> N{i+1}')
+            lines.append(f'    N{i} ==|"{label}"|==> N{i + 1}')
 
     return "\n".join(lines)
 
 
 def _build_route_html(
-    stop_names: list, pois: list, distance_info: str, city: str, user_input: str, start_name: str = "",
-    start_coords: tuple = None, dest_name: str = "", dest_coords: tuple = None,
+    stop_names: list,
+    pois: list,
+    distance_info: str,
+    city: str,
+    user_input: str,
+    start_name: str = "",
+    start_coords: tuple = None,
+    dest_name: str = "",
+    dest_coords: tuple = None,
 ) -> str:
     poi_map = {}
     for p in pois:
         lng, lat = p.get("lng"), p.get("lat")
         if lng is not None and lat is not None:
             poi_map[p["name"]] = {
-                "lat": lat, "lng": lng,
-                "rating": p.get("rating"), "price": p.get("price_per_person"),
-                "address": p.get("address", ""), "category": p.get("category", ""),
+                "lat": lat,
+                "lng": lng,
+                "rating": p.get("rating"),
+                "price": p.get("price_per_person"),
+                "address": p.get("address", ""),
+                "category": p.get("category", ""),
             }
 
     def _lookup(name):
@@ -317,30 +621,67 @@ def _build_route_html(
 
     stops = []
     if start_coords:
-        stops.append({"name": start_name, "lat": start_coords[0], "lng": start_coords[1],
-                       "rating": None, "price": None, "address": "", "num": 0})
+        stops.append(
+            {
+                "name": start_name,
+                "lat": start_coords[0],
+                "lng": start_coords[1],
+                "rating": None,
+                "price": None,
+                "address": "",
+                "num": 0,
+            }
+        )
     else:
-        stops.append({"name": start_name, "lat": None, "lng": None,
-                       "rating": None, "price": None, "address": "", "num": 0})
+        stops.append(
+            {"name": start_name, "lat": None, "lng": None, "rating": None, "price": None, "address": "", "num": 0}
+        )
 
     for name in stop_names:
         d = _lookup(name)
         if d:
             stops.append({**d, "name": name, "num": len(stops)})
         else:
-            stops.append({"name": name, "lat": None, "lng": None, "rating": None, "price": None,
-                          "address": "", "num": len(stops)})
+            stops.append(
+                {
+                    "name": name,
+                    "lat": None,
+                    "lng": None,
+                    "rating": None,
+                    "price": None,
+                    "address": "",
+                    "num": len(stops),
+                }
+            )
 
     if dest_name and dest_coords:
-        stops.append({"name": dest_name, "lat": dest_coords[0], "lng": dest_coords[1],
-                       "rating": None, "price": None, "address": "", "num": len(stops)})
+        stops.append(
+            {
+                "name": dest_name,
+                "lat": dest_coords[0],
+                "lng": dest_coords[1],
+                "rating": None,
+                "price": None,
+                "address": "",
+                "num": len(stops),
+            }
+        )
     elif dest_name:
         d = _lookup(dest_name)
         if d:
             stops.append({**d, "name": dest_name, "num": len(stops)})
         else:
-            stops.append({"name": dest_name, "lat": None, "lng": None, "rating": None, "price": None,
-                          "address": "", "num": len(stops)})
+            stops.append(
+                {
+                    "name": dest_name,
+                    "lat": None,
+                    "lng": None,
+                    "rating": None,
+                    "price": None,
+                    "address": "",
+                    "num": len(stops),
+                }
+            )
 
     coords = [s for s in stops if s["lat"] is not None]
     if not coords:

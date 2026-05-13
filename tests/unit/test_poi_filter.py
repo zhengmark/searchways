@@ -1,11 +1,10 @@
 """Unit tests for app.algorithms.poi_filter — POI filtering utilities."""
 
-import pytest
 from app.algorithms.poi_filter import (
+    deduplicate_by_name,
     filter_by_category,
     filter_by_coords,
     filter_near_anchor,
-    deduplicate_by_name,
     normalize_keywords,
 )
 

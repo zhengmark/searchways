@@ -1,7 +1,9 @@
 """高德 API 封装 — 所有函数直接返回 Python 对象，异常用 AmapAPIError."""
-import json
+
 import time
+
 import requests
+
 from app.config import AMAP_API_KEY
 
 AMAP_PLACE_TEXT_API = "https://restapi.amap.com/v3/place/text"
@@ -17,6 +19,7 @@ AMAP_REGEO_API = "https://restapi.amap.com/v3/geocode/regeo"
 
 class AmapAPIError(Exception):
     """高德 API 错误，包含可读消息."""
+
     def __init__(self, message: str, raw: dict = None):
         super().__init__(message)
         self.raw = raw or {}
@@ -120,7 +123,8 @@ def geocode(address: str, city: str = "") -> dict:
     lng, lat = location.split(",")
     g = data["geocodes"][0]
     return {
-        "lng": float(lng), "lat": float(lat),
+        "lng": float(lng),
+        "lat": float(lat),
         "city": g.get("city", "").rstrip("市"),
         "district": g.get("district", ""),
         "province": g.get("province", ""),
@@ -144,12 +148,15 @@ def input_tips(keywords: str, city: str = "", limit: int = 5) -> list:
         loc = t.get("location", "")
         if loc and "," in loc and loc != "0,0":
             lng_str, lat_str = loc.split(",")
-            results.append({
-                "name": t.get("name", ""),
-                "lng": float(lng_str), "lat": float(lat_str),
-                "address": t.get("address", ""),
-                "district": t.get("district", ""),
-            })
+            results.append(
+                {
+                    "name": t.get("name", ""),
+                    "lng": float(lng_str),
+                    "lat": float(lat_str),
+                    "address": t.get("address", ""),
+                    "district": t.get("district", ""),
+                }
+            )
     return results
 
 
@@ -232,8 +239,7 @@ def search_around(location: str, keywords: str, radius: int = 3000, limit: int =
     return [_build_poi_dict(p) for p in data.get("pois", [])[:limit]]
 
 
-def search_along_route(origin: str, destination: str, keywords: str,
-                       radius: int = 3000, limit: int = 20) -> list:
+def search_along_route(origin: str, destination: str, keywords: str, radius: int = 3000, limit: int = 20) -> list:
     """沿途搜索：采样 4 点做周边搜索并合并去重."""
     try:
         o_lng, o_lat = (float(x) for x in origin.split(","))
@@ -368,7 +374,7 @@ def search_top_attractions(city: str, location: str = None, limit: int = 10) -> 
         return []
 
     pois = [_build_poi_dict(p) for p in data.get("pois", [])]
-    pois.sort(key=lambda x: (x.get("rating") or 0), reverse=True)
+    pois.sort(key=lambda x: x.get("rating") or 0, reverse=True)
     return pois[:limit]
 
 
@@ -376,9 +382,10 @@ def search_top_attractions(city: str, location: str = None, limit: int = 10) -> 
 # 路线规划 API（步行 / 骑行 / 公交地铁 / 驾车）
 # ═══════════════════════════════════════════════
 
+
 def _retry_direction(url: str, params: dict, max_retries: int = 2, timeout: int = 10) -> dict | None:
     """路线 API 带重试，返回 JSON 或 None."""
-    last_error = None
+    _last_error = None
     for attempt in range(max_retries + 1):
         try:
             resp = requests.get(url, params=params, timeout=timeout)
@@ -386,11 +393,11 @@ def _retry_direction(url: str, params: dict, max_retries: int = 2, timeout: int 
             data = resp.json()
             return data
         except requests.Timeout:
-            last_error = "timeout"
+            _last_error = "timeout"
         except requests.ConnectionError:
-            last_error = "connection"
+            _last_error = "connection"
         except requests.RequestException as e:
-            last_error = str(e)
+            _last_error = str(e)
         if attempt < max_retries:
             time.sleep(0.5 * (attempt + 1))
     return None
@@ -408,9 +415,14 @@ def get_walking_route(origin: str, destination: str) -> dict | None:
         失败返回 None
     """
     _check_key()
-    data = _retry_direction(AMAP_WALKING_API, {
-        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
-    })
+    data = _retry_direction(
+        AMAP_WALKING_API,
+        {
+            "key": AMAP_API_KEY,
+            "origin": origin,
+            "destination": destination,
+        },
+    )
     if not data or data.get("status") != "1":
         return None
 
@@ -419,11 +431,15 @@ def get_walking_route(origin: str, destination: str) -> dict | None:
         return None
 
     p = paths[0]
-    steps = [{"instruction": s.get("instruction", ""),
-              "distance": int(s.get("distance", 0)),
-              "duration": int(s.get("duration", 0)),
-              "road": s.get("road", "")}
-             for s in p.get("steps", [])]
+    steps = [
+        {
+            "instruction": s.get("instruction", ""),
+            "distance": int(s.get("distance", 0)),
+            "duration": int(s.get("duration", 0)),
+            "road": s.get("road", ""),
+        }
+        for s in p.get("steps", [])
+    ]
 
     return {
         "success": True,
@@ -435,8 +451,7 @@ def get_walking_route(origin: str, destination: str) -> dict | None:
     }
 
 
-def transit_route(origin: str, destination: str, city: str = "西安",
-                  strategy: int = 0) -> dict | None:
+def transit_route(origin: str, destination: str, city: str = "西安", strategy: int = 0) -> dict | None:
     """公交/地铁路线规划.
 
     Args:
@@ -451,10 +466,17 @@ def transit_route(origin: str, destination: str, city: str = "西安",
         失败返回 None
     """
     _check_key()
-    data = _retry_direction(AMAP_TRANSIT_API, {
-        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
-        "city": city, "strategy": strategy, "extensions": "all",
-    })
+    data = _retry_direction(
+        AMAP_TRANSIT_API,
+        {
+            "key": AMAP_API_KEY,
+            "origin": origin,
+            "destination": destination,
+            "city": city,
+            "strategy": strategy,
+            "extensions": "all",
+        },
+    )
     if not data or data.get("status") != "1":
         return None
 
@@ -476,24 +498,28 @@ def transit_route(origin: str, destination: str, city: str = "西安",
             dep_name = dep.get("name", str(dep)) if isinstance(dep, dict) else str(dep)
             arr_name = arr.get("name", str(arr)) if isinstance(arr, dict) else str(arr)
             line_type = bl.get("type", "")
-            steps.append({
-                "mode": "地铁" if "地铁" in line_type else "公交",
-                "line_name": bl.get("name", ""),
-                "start_stop": dep_name,
-                "end_stop": arr_name,
-                "station_count": int(bl.get("station_count", 0)),
-                "duration": int(bl.get("duration", 0)),
-            })
+            steps.append(
+                {
+                    "mode": "地铁" if "地铁" in line_type else "公交",
+                    "line_name": bl.get("name", ""),
+                    "start_stop": dep_name,
+                    "end_stop": arr_name,
+                    "station_count": int(bl.get("station_count", 0)),
+                    "duration": int(bl.get("duration", 0)),
+                }
+            )
         elif walk:
-            steps.append({
-                "mode": "步行",
-                "line_name": "",
-                "start_stop": "",
-                "end_stop": "",
-                "station_count": 0,
-                "distance": int(walk.get("distance", 0)),
-                "duration": int(walk.get("duration", 0)),
-            })
+            steps.append(
+                {
+                    "mode": "步行",
+                    "line_name": "",
+                    "start_stop": "",
+                    "end_stop": "",
+                    "station_count": 0,
+                    "distance": int(walk.get("distance", 0)),
+                    "duration": int(walk.get("duration", 0)),
+                }
+            )
 
     return {
         "success": True,
@@ -519,9 +545,14 @@ def biking_route(origin: str, destination: str) -> dict | None:
     Note: 使用高德 v4 API，响应格式是 errcode/errmsg/data 而非 status/info/route.
     """
     _check_key()
-    data = _retry_direction(AMAP_BIKING_API, {
-        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
-    })
+    data = _retry_direction(
+        AMAP_BIKING_API,
+        {
+            "key": AMAP_API_KEY,
+            "origin": origin,
+            "destination": destination,
+        },
+    )
     if not data:
         return None
 
@@ -534,11 +565,15 @@ def biking_route(origin: str, destination: str) -> dict | None:
         return None
 
     p = paths[0]
-    steps = [{"instruction": s.get("instruction", ""),
-              "distance": int(s.get("distance", 0)),
-              "duration": int(s.get("duration", 0)),
-              "road": s.get("road", "")}
-             for s in p.get("steps", [])]
+    steps = [
+        {
+            "instruction": s.get("instruction", ""),
+            "distance": int(s.get("distance", 0)),
+            "duration": int(s.get("duration", 0)),
+            "road": s.get("road", ""),
+        }
+        for s in p.get("steps", [])
+    ]
 
     return {
         "success": True,
@@ -563,10 +598,15 @@ def driving_route(origin: str, destination: str) -> dict | None:
         失败返回 None
     """
     _check_key()
-    data = _retry_direction(AMAP_DRIVING_API, {
-        "key": AMAP_API_KEY, "origin": origin, "destination": destination,
-        "extensions": "all",
-    })
+    data = _retry_direction(
+        AMAP_DRIVING_API,
+        {
+            "key": AMAP_API_KEY,
+            "origin": origin,
+            "destination": destination,
+            "extensions": "all",
+        },
+    )
     if not data or data.get("status") != "1":
         return None
 
@@ -575,11 +615,15 @@ def driving_route(origin: str, destination: str) -> dict | None:
         return None
 
     p = paths[0]
-    steps = [{"instruction": s.get("instruction", ""),
-              "distance": int(s.get("distance", 0)),
-              "duration": int(s.get("duration", 0)),
-              "road": s.get("road", "")}
-             for s in p.get("steps", [])]
+    steps = [
+        {
+            "instruction": s.get("instruction", ""),
+            "distance": int(s.get("distance", 0)),
+            "duration": int(s.get("duration", 0)),
+            "road": s.get("road", ""),
+        }
+        for s in p.get("steps", [])
+    ]
 
     return {
         "success": True,

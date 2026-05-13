@@ -1,14 +1,20 @@
 """推荐引擎 — 统一推荐入口，整合召回+精排."""
-from app.recommender.recall import multi_recall
+
 from app.recommender.rank import rank_candidates
+from app.recommender.recall import multi_recall
 
 
-def recommend(pois: list, o_lat: float, o_lng: float,
-              d_lat: float = None, d_lng: float = None,
-              clusters: list[dict] = None,
-              target_categories: list = None,
-              user_prefs: dict = None,
-              top_k: int = 10) -> list:
+def recommend(
+    pois: list,
+    o_lat: float,
+    o_lng: float,
+    d_lat: float = None,
+    d_lng: float = None,
+    clusters: list[dict] = None,
+    target_categories: list = None,
+    user_prefs: dict = None,
+    top_k: int = 10,
+) -> list:
     """推荐 POI 列表.
 
     Args:
@@ -30,14 +36,15 @@ def recommend(pois: list, o_lat: float, o_lng: float,
     if target_categories:
         user_prefs = dict(user_prefs or {})
         user_prefs.setdefault("target_categories", [])
-        user_prefs["target_categories"] = list(set(
-            user_prefs.get("target_categories", []) + target_categories
-        ))
+        user_prefs["target_categories"] = list(set(user_prefs.get("target_categories", []) + target_categories))
 
     # 召回
     candidates = multi_recall(
-        pois, o_lat, o_lng,
-        d_lat=d_lat, d_lng=d_lng,
+        pois,
+        o_lat,
+        o_lng,
+        d_lat=d_lat,
+        d_lng=d_lng,
         clusters=clusters or [],
         target_categories=target_categories,
         total_k=max(top_k * 5, 30),
@@ -45,8 +52,11 @@ def recommend(pois: list, o_lat: float, o_lng: float,
 
     # 精排
     ranked = rank_candidates(
-        candidates, o_lat, o_lng,
-        d_lat=d_lat, d_lng=d_lng,
+        candidates,
+        o_lat,
+        o_lng,
+        d_lat=d_lat,
+        d_lng=d_lng,
         user_prefs=user_prefs,
         top_k=top_k,
     )

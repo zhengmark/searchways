@@ -1,11 +1,11 @@
 """精排 — 多因子加权打分，支持路线走廊感知."""
+
 import math
+
 from app.algorithms.geo import haversine
 
 
-def _corridor_distance(lat: float, lng: float,
-                       o_lat: float, o_lng: float,
-                       d_lat: float, d_lng: float) -> int:
+def _corridor_distance(lat: float, lng: float, o_lat: float, o_lng: float, d_lat: float, d_lng: float) -> int:
     """计算点到 O→D 线段的最短距离（米）."""
     dx = d_lng - o_lng
     dy = d_lat - o_lat
@@ -19,9 +19,7 @@ def _corridor_distance(lat: float, lng: float,
     return haversine(lat, lng, proj_lat, proj_lng)
 
 
-def _route_progress(lat: float, lng: float,
-                    o_lat: float, o_lng: float,
-                    d_lat: float, d_lng: float) -> float:
+def _route_progress(lat: float, lng: float, o_lat: float, o_lng: float, d_lat: float, d_lng: float) -> float:
     """计算 POI 在 O→D 方向上的进度 [0,1]，越均匀分布越好."""
     dx = d_lng - o_lng
     dy = d_lat - o_lat
@@ -32,10 +30,15 @@ def _route_progress(lat: float, lng: float,
     return max(0.0, min(1.0, t))
 
 
-def score_poi(poi: dict, o_lat: float, o_lng: float,
-              d_lat: float = None, d_lng: float = None,
-              user_prefs: dict = None,
-              already_picked: list = None) -> float:
+def score_poi(
+    poi: dict,
+    o_lat: float,
+    o_lng: float,
+    d_lat: float = None,
+    d_lng: float = None,
+    user_prefs: dict = None,
+    already_picked: list = None,
+) -> float:
     """对单个 POI 打分 (0~1)，支持路线走廊感知.
 
     因子:
@@ -57,7 +60,7 @@ def score_poi(poi: dict, o_lat: float, o_lng: float,
         d = _corridor_distance(poi["lat"], poi["lng"], o_lat, o_lng, d_lat, d_lng)
     else:
         d = haversine(o_lat, o_lng, poi["lat"], poi["lng"])
-    dist_factor = math.exp(-(d ** 2) / (2 * 5000 ** 2))
+    dist_factor = math.exp(-(d**2) / (2 * 5000**2))
     score += 0.30 * dist_factor
 
     # 品类匹配 (25%)
@@ -90,9 +93,15 @@ def score_poi(poi: dict, o_lat: float, o_lng: float,
     return score
 
 
-def rank_candidates(candidates: list, o_lat: float, o_lng: float,
-                    d_lat: float = None, d_lng: float = None,
-                    user_prefs: dict = None, top_k: int = 10) -> list:
+def rank_candidates(
+    candidates: list,
+    o_lat: float,
+    o_lng: float,
+    d_lat: float = None,
+    d_lng: float = None,
+    user_prefs: dict = None,
+    top_k: int = 10,
+) -> list:
     """对候选集打分排序，带多样性贪心选择."""
     if not candidates:
         return []

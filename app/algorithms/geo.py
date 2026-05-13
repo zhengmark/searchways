@@ -1,4 +1,5 @@
 """Geometry utilities — haversine distance and projection."""
+
 import math
 
 
