@@ -57,6 +57,14 @@ _SYSTEM_PROMPT = """你是一个本地路线规划助手「出发酱」。用工
 - 约束保留：未被明确推翻的约束继续生效（如改时间不改偏好→偏好保留）
 - 冲突：自相矛盾时友善指出反问；cache 的坐标可复用
 - 始终用中文回复，语气轻松友好，不说「根据算法」「系统显示」
+
+## 最终解说格式（必须严格遵守）
+生成最终解说时，必须基于 build_route 工具返回的真实数据：
+- **站点列表**：按顺序列出 build_route 返回的所有 stop name，一个不漏
+- **真实数据**：时长和距离必须使用 build_route 返回的 total_duration_min / total_distance，严禁自编数字
+- **推荐理由**：每个站点附带 1 句简短推荐（参考该簇的 top_poi_names）
+- **禁止虚构**：严禁提到不存在的站点、活动或数据
+- **Mermaid 图**：所有站点（含起终点）必须出现在 mermaid 图中
 """
 
 
@@ -277,6 +285,9 @@ def run_unified_agent(
         for v in violations[:3]:
             narration += f"- {v}\n"
 
+    # 解说对齐：确保引用真实路线数据
+    narration = _align_narration(narration, agent_state)
+
     # 从 narration 中提取 mermaid 代码
     narration, mermaid = extract_mermaid_from_text(narration)
 
@@ -400,6 +411,64 @@ def _brief_input(tool_name: str, inp: dict) -> str:
     if tool_name == "build_route":
         return f"clusters={inp.get('cluster_ids', [])}, stops={inp.get('num_stops', 3)}"
     return ""
+
+
+
+
+def _align_narration(narration: str, agent_state: dict) -> str:
+    """Post-process narration to ensure alignment with actual route data."""
+    stops = agent_state.get("stop_names", [])
+    path = agent_state.get("path_result", {})
+    all_pois = agent_state.get("all_pois", [])
+
+    if not stops or not narration:
+        return narration
+
+    # Smart partial matching: stop name in narration, or significant overlap
+    def _is_mentioned(stop, text):
+        if stop in text:
+            return True
+        # Check if a significant part of stop name appears in narration
+        for prefix_len in [max(4, len(stop)*3//4), len(stop)//2, max(3, len(stop)//3)]:
+            prefix = stop[:prefix_len]
+            if len(prefix) >= 3 and prefix in text:
+                return True
+        # Check if stop contains a long enough substring from narration
+        # (handles abbreviations like '老刘家泡馍' for '老刘家泡馍.陕西老字号(...)')
+        stop_parts = stop.replace('.', ' ').replace('(', ' ').replace(')', ' ').split()
+        # If any 4+ char part of stop appears in narration
+        for part in stop_parts:
+            if len(part) >= 4 and part in text:
+                return True
+        return False
+
+    mentioned = [s for s in stops if _is_mentioned(s, narration)]
+    missing = [s for s in stops if not _is_mentioned(s, narration)]
+
+    if missing:
+        lines = ["\n\n---\n## 📍 路线详情\n"]
+        for i, stop in enumerate(stops, 1):
+            poi_info = next((p for p in all_pois if p.get("name") == stop), {})
+            cat = poi_info.get("category", "")
+            rating = poi_info.get("rating", "")
+            extra = ""
+            if cat:
+                extra = f" ({cat}"
+                if rating:
+                    extra += f" ⭐{rating}"
+                extra += ")"
+            lines.append(f"{i}. **{stop}**{extra}")
+
+        duration = path.get("total_duration_min", 0)
+        distance = path.get("total_distance", 0)
+        if duration:
+            lines.append(f"\n⏱ 总时长约 {duration} 分钟")
+        if distance:
+            lines.append(f"📏 总距离约 {distance/1000:.1f} 公里")
+
+        narration = narration.rstrip() + "\n".join(lines)
+
+    return narration
 
 
 def _finalize_session(
