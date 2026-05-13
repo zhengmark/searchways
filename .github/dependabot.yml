@@ -10,12 +10,4 @@ updates:
       - "dependencies"
     assignees:
       - "zhengmark"
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-      - "ci"
+    versioning-strategy: increase
